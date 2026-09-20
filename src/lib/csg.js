@@ -63,26 +63,15 @@ function resultMesh(solid, name, color) {
  * surface contact point:
  *   raised      : anchor at the BOTTOM of the object, body extends along +Y
  *   inset       : anchor stays at the surface; the slab sinks `inset` below
- *   flush_inlay : the slab spans the full base extent along the object axis
+ *   flush_inlay : the slab sinks by the object's inlayDepth below the anchor
  */
 export function placeObject(geom, obj, settings, mode) {
 	const q = quaternionFromRot(obj.rot || { x: 0, y: 0, z: 0 });
 	const e = Math.max(0.05, obj.extrudeHeight ?? 4);
 	const up = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
 
-	let slab;
-	let halfUp = 0;
-	if (mode === 'flush_inlay') {
-		// Project the base half-extents onto the object's extrusion axis so the
-		// slab fully pierces the plate (flush, full-thickness inlay).
-		const hw = settings.width / 2, hh = settings.height / 2, hd = settings.depth / 2;
-		halfUp = hw * Math.abs(up.x) + hh * Math.abs(up.y) + hd * Math.abs(up.z);
-		slab = 2 * halfUp + 2 * PENETRATION;
-	} else if (mode === 'inset') {
-		slab = Math.max(0.001, settings.insetDepth) + PENETRATION;
-	} else {
-		slab = e + PENETRATION;
-	}
+	const depth = Math.max(0.001, mode === 'flush_inlay' ? obj.inlayDepth ?? 2 : settings.insetDepth);
+	const slab = (mode === 'raised' ? e : depth) + PENETRATION;
 
 	const brush = new THREE.Mesh(geom, null);
 	brush.scale.set(1, Math.max(0.01, slab), 1);
@@ -93,14 +82,8 @@ export function placeObject(geom, obj, settings, mode) {
 		// Bottom face sits on the anchor; body extends along +Y (slightly
 		// overlapping the surface for a watertight union).
 		brush.position.set(pos.x, pos.y, pos.z).addScaledVector(up, (e - PENETRATION) / 2);
-	} else if (mode === 'inset') {
-		brush.position.set(pos.x, pos.y, pos.z).addScaledVector(up, (PENETRATION - settings.insetDepth) / 2);
 	} else {
-		// flush_inlay: center the slab on the plate (origin-centered base) so it
-		// fully pierces the base, keeping the object's in-plane offset.
-		const posV = new THREE.Vector3(pos.x, pos.y, pos.z);
-		const along = posV.dot(up); // anchor height above the plate center plane
-		brush.position.copy(posV.addScaledVector(up, -along));
+		brush.position.set(pos.x, pos.y, pos.z).addScaledVector(up, (PENETRATION - depth) / 2);
 	}
 	brush.updateMatrixWorld(true);
 	return brush;

@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { Move3D, Rotate3D, Magnet, Maximize } from 'lucide-react';
+import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
+import { Move3D, Rotate3D, Magnet, Maximize, Blend } from 'lucide-react';
 import { disposeGroup } from '../lib/csg.js';
 import { placeObject } from '../lib/csg.js';
 import { createBaseGeometry } from '../lib/baseShapes.js';
@@ -13,11 +14,13 @@ import { quaternionFromRot, rotFromQuaternion, surfacePlacement } from '../lib/p
 
 export default function Viewport({ model, onModelRef, settings, fonts, selectedId, onSelect, onUpdate }) {
 	const mountRef = useRef(null);
+	const axisRef = useRef(null);
 	const threeRef = useRef(null);
 	const modelContainerRef = useRef(null);
 	const latest = useRef(null);
 	const [mode, setMode] = useState('translate');
 	const [snap, setSnap] = useState(true);
+	const [transparentBase, setTransparentBase] = useState(true);
 	const [viewportError, setViewportError] = useState(null);
 	latest.current = { settings, fonts, selectedId, onSelect, onUpdate, snap };
 
@@ -52,6 +55,56 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 		controls.target.set(0, 0, 0);
 		controls.minDistance = 0.1;
 		controls.maxDistance = 10000000;
+		const viewHelper = new ViewHelper(camera, renderer.domElement);
+		viewHelper.setLabelStyle('22px sans-serif', '#101014', 20);
+		viewHelper.setLabels('+X', '+Y', '+Z');
+		const negativeAxes = viewHelper.children.filter((child) => child.userData.type?.startsWith('neg'));
+		const originalNegativeMaterial = negativeAxes[0].material;
+		for (const sprite of negativeAxes) {
+			const axis = sprite.userData.type.slice(-1);
+			const label = document.createElement('canvas');
+			label.width = label.height = 64;
+			const context = label.getContext('2d');
+			context.fillStyle = { X: '#ff4466', Y: '#88ff44', Z: '#4488ff' }[axis];
+			context.beginPath();
+			context.arc(32, 32, 20, 0, Math.PI * 2);
+			context.fill();
+			context.fillStyle = '#101014';
+			context.font = '22px sans-serif';
+			context.textAlign = 'center';
+			context.fillText(`-${axis}`, 32, 41);
+			const texture = new THREE.CanvasTexture(label);
+			texture.colorSpace = THREE.SRGBColorSpace;
+			sprite.material = new THREE.SpriteMaterial({ map: texture, toneMapped: false, opacity: 0.65 });
+		}
+		originalNegativeMaterial.map.dispose();
+		originalNegativeMaterial.dispose();
+		const axisElement = axisRef.current;
+		let axisPointer = null;
+		const axisDown = (event) => {
+			if (event.button !== 0 || viewHelper.animating) return;
+			axisPointer = { id: event.pointerId, x: event.clientX, y: event.clientY };
+			axisElement.setPointerCapture(event.pointerId);
+		};
+		const axisUp = (event) => {
+			if (axisPointer?.id !== event.pointerId) return;
+			if (event.type !== 'pointercancel' && Math.hypot(event.clientX - axisPointer.x, event.clientY - axisPointer.y) < 5) {
+				controls.enableDamping = false;
+				controls.update();
+				controls.enableDamping = true;
+				viewHelper.center.copy(controls.target);
+				if (viewHelper.handleClick(event)) {
+					controls.enabled = false;
+					transform.enabled = false;
+					axisElement.setAttribute('aria-busy', 'true');
+				}
+			}
+			axisPointer = null;
+			if (axisElement.hasPointerCapture(event.pointerId)) axisElement.releasePointerCapture(event.pointerId);
+		};
+		axisElement.addEventListener('pointerdown', axisDown);
+		axisElement.addEventListener('pointerup', axisUp);
+		axisElement.addEventListener('pointercancel', axisUp);
 
 		// Lighting: key directional + soft fill + ambient.
 		const key = new THREE.DirectionalLight(0xffffff, 2.2);
@@ -111,7 +164,7 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 		});
 		transform.addEventListener('mouseUp', () => commit(transform.object));
 		const pointerDown = (event) => {
-			if (event.button !== 0 || transform.axis) return;
+			if (event.button !== 0 || transform.axis || viewHelper.animating) return;
 			cast(event);
 			const hit = raycaster.intersectObjects(proxies.children, true)[0];
 			if (!hit) return;
@@ -159,6 +212,7 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 			if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
 		};
 		const fit = () => {
+			if (viewHelper.animating) return;
 			const bounds = new THREE.Box3().setFromObject(container);
 			if (bounds.isEmpty()) return;
 			const sphere = bounds.getBoundingSphere(new THREE.Sphere());
@@ -184,11 +238,29 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 		window.addEventListener('keydown', keyDown);
 
 		let raf = 0;
-		const animate = () => {
+		let previousTime = performance.now();
+		const viewDirection = new THREE.Vector3();
+		const animate = (time = performance.now()) => {
 			raf = requestAnimationFrame(animate);
-			controls.update();
+			const delta = Math.min((time - previousTime) / 1000, 0.1);
+			previousTime = time;
+			if (viewHelper.animating) {
+				viewHelper.update(delta);
+				if (!viewHelper.animating) {
+					controls.enabled = true;
+					transform.enabled = true;
+					axisElement.setAttribute('aria-busy', 'false');
+				}
+			} else controls.update();
+			viewDirection.copy(camera.position).sub(controls.target).normalize();
+			const alignedAxis = ['x', 'y', 'z'].find((axis) => Math.abs(viewDirection[axis]) > 1 - 1e-8);
+			const viewDescription = alignedAxis ? `View from ${viewDirection[alignedAxis] > 0 ? '+' : '-'}${alignedAxis.toUpperCase()}` : 'Orbit view';
+			if (axisElement.getAttribute('aria-description') !== viewDescription) axisElement.setAttribute('aria-description', viewDescription);
 			if (outline.visible && transform.object) outline.setFromObject(transform.object);
 			renderer.render(scene, camera);
+			renderer.autoClear = false;
+			viewHelper.render(renderer);
+			renderer.autoClear = true;
 		};
 		animate();
 
@@ -208,6 +280,10 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 			cancelAnimationFrame(raf);
 			ro.disconnect();
 			controls.dispose();
+			viewHelper.dispose();
+			axisElement.removeEventListener('pointerdown', axisDown);
+			axisElement.removeEventListener('pointerup', axisUp);
+			axisElement.removeEventListener('pointercancel', axisUp);
 			transform.dispose();
 			outline.geometry.dispose();
 			outline.material.dispose();
@@ -249,6 +325,16 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 	}, [model, onModelRef]);
 
 	useEffect(() => {
+		const base = model?.getObjectByName('Base_Mesh');
+		if (!base) return;
+		const translucent = transparentBase;
+		base.material.transparent = translucent;
+		base.material.opacity = translucent ? 0.6 : 1;
+		base.material.depthWrite = !translucent;
+		base.material.needsUpdate = true;
+	}, [model, transparentBase]);
+
+	useEffect(() => {
 		const state = threeRef.current;
 		if (!state || !fonts) return;
 		state.transform.detach();
@@ -285,12 +371,14 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 	return (
 		<div className="relative min-h-[240px] min-w-0 flex-1" data-testid="viewport">
 			<div ref={mountRef} className="absolute inset-0" />
+			<div ref={axisRef} role="group" aria-label="Align view with axis" aria-busy="false" title="Align view with axis" className="absolute bottom-0 right-0 h-32 w-32 cursor-pointer touch-none" />
 			<div className="absolute left-3 top-3 flex gap-1 rounded border border-white/10 bg-neutral-900/95 p-1" role="toolbar" aria-label="Viewport tools">
 				{[{ id: 'translate', Icon: Move3D, label: 'Move (W)' }, { id: 'rotate', Icon: Rotate3D, label: 'Rotate (E)' }].map(({ id, Icon, label }) => (
 					<button key={id} title={label} aria-label={label} aria-pressed={mode === id} onClick={() => setMode(id)} className={`h-9 w-9 grid place-items-center rounded ${mode === id ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-700'}`}><Icon size={18} /></button>
 				))}
 				<button title="Snap to surface" aria-label="Snap to surface" aria-pressed={snap} onClick={() => setSnap(!snap)} className={`h-9 w-9 grid place-items-center rounded ${snap ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-700'}`}><Magnet size={18} /></button>
 				<button title="Fit model (F)" aria-label="Fit model (F)" onClick={() => threeRef.current?.fit()} className="h-9 w-9 grid place-items-center rounded text-neutral-300 hover:bg-neutral-700"><Maximize size={18} /></button>
+				<button title="Transparent base preview" aria-label="Transparent base preview" aria-pressed={transparentBase} onClick={() => setTransparentBase(!transparentBase)} className={`h-9 w-9 grid place-items-center rounded ${transparentBase ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-700'}`}><Blend size={18} /></button>
 			</div>
 			{viewportError && <p role="alert" className="absolute bottom-4 left-4 right-4 bg-red-950 p-3 text-sm">{viewportError}</p>}
 		</div>

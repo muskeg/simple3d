@@ -20,6 +20,7 @@ function makeObject(overrides = {}) {
 		fontSize: 16,
 		curveSegments: 8,
 		extrudeHeight: 4,
+		inlayDepth: 2,
 		pos: facePositionPreset('top', { width: 100, depth: 60, height: 12 }),
 		rot: preset.rot,
 		face: 'top',

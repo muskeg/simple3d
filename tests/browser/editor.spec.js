@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { PNG } from 'pngjs';
+import { readFile } from 'node:fs/promises';
+import JSZip from 'jszip';
 
 async function ready(page) {
 	await expect(page.getByRole('button', { name: 'Download .STL', exact: true })).toBeEnabled();
@@ -97,6 +99,84 @@ test('independent fonts, object lifecycle, rotations, modes and exports', async 
 	expect((await download).suggestedFilename()).toBe('simple3d-model.3mf');
 });
 
+test('flush inlay depth is independent per face and preserved in 3MF', async ({ page }) => {
+	async function exportedInlayBounds() {
+		const pending = page.waitForEvent('download');
+		await page.getByRole('button', { name: 'Download .3MF', exact: true }).click();
+		const download = await pending;
+		const zip = await JSZip.loadAsync(await readFile(await download.path()));
+		const xml = await zip.file('3D/3dmodel.model').async('string');
+		return page.evaluate((source) => {
+			const document = new DOMParser().parseFromString(source, 'application/xml');
+			return [...document.querySelectorAll('object')].filter((object) => object.getAttribute('name')?.startsWith('Inlay_')).map((object) => {
+				const heights = [...object.querySelectorAll('vertex')].map((vertex) => Number(vertex.getAttribute('z')));
+				return [Math.min(...heights), Math.max(...heights)];
+			});
+		}, xml);
+	}
+	await page.getByRole('button', { name: 'Flush Inlay', exact: true }).click();
+	await expect(page.getByRole('textbox', { name: 'Inlay Depth', exact: true })).toHaveValue('2');
+	await expect(page.getByRole('textbox', { name: 'Extrusion Height', exact: true })).toHaveCount(0);
+	await number(page, 'Inlay Depth', 1.25);
+	await page.getByRole('button', { name: 'Add Text Object', exact: true }).click();
+	await page.getByRole('textbox', { name: 'Text', exact: true }).fill('Bottom');
+	await page.getByRole('button', { name: 'bottom', exact: true }).click();
+	await number(page, 'Inlay Depth', 3);
+	await page.getByRole('button', { name: 'Select ABC', exact: true }).click();
+	await expect(page.getByRole('textbox', { name: 'Inlay Depth', exact: true })).toHaveValue('1.25');
+	expect(await exportedInlayBounds()).toEqual([[4.75, 6], [-6, -3]]);
+	await number(page, 'Inlay Depth', 0.5);
+	expect(await exportedInlayBounds()).toEqual([[5.5, 6], [-6, -3]]);
+});
+
+test('transparent base reveals hidden inlays without changing exports', async ({ page }, testInfo) => {
+	await page.getByRole('button', { name: 'Flush Inlay', exact: true }).click();
+	await page.getByRole('button', { name: 'bottom', exact: true }).click();
+	await ready(page);
+	const toggle = page.getByRole('button', { name: 'Transparent base preview', exact: true });
+	await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+	const original = await stl(page);
+	const canvas = page.locator('canvas');
+	const countGold = (buffer) => {
+		const image = PNG.sync.read(buffer);
+		let count = 0;
+		for (let offset = 0; offset < image.data.length; offset += 4) {
+			const [red, green, blue] = image.data.subarray(offset, offset + 3);
+			if (red > 90 && red > green * 1.1 && green > blue * 1.15) count++;
+		}
+		return count;
+	};
+	const translucent = await canvas.screenshot({ path: testInfo.outputPath('translucent-base.png') });
+	await toggle.click();
+	await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+	const opaque = await canvas.screenshot({ path: testInfo.outputPath('opaque-base.png') });
+	expect(countGold(translucent)).toBeGreaterThan(countGold(opaque) + 100);
+	expect(await stl(page)).toEqual(original);
+	await toggle.click();
+	await number(page, 'Inlay Depth', 3);
+	await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+	await page.setViewportSize({ width: 390, height: 844 });
+	await page.getByRole('button', { name: 'Fit model (F)', exact: true }).click();
+	await expect(toggle).toBeVisible();
+	await page.screenshot({ path: testInfo.outputPath('translucent-base-mobile.png') });
+	for (const mode of ['Raised', 'Inset']) {
+		await page.getByRole('button', { name: mode, exact: true }).click();
+		await ready(page);
+		await expect(toggle).toBeVisible();
+		await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+		const before = await stl(page);
+		const transparentPixels = await canvas.screenshot();
+		await toggle.click();
+		await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+		expect((await canvas.screenshot()).equals(transparentPixels)).toBe(false);
+		expect(await stl(page)).toEqual(before);
+		await page.getByRole('button', { name: 'Flush Inlay', exact: true }).click();
+		await ready(page);
+		await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+		await toggle.click();
+	}
+});
+
 test('PNG upload, replacement, hole and threshold controls', async ({ page }) => {
 	await page.getByRole('button', { name: 'Delete ABC', exact: true }).click();
 	await ready(page);
@@ -164,6 +244,38 @@ test('pointer drag, selection and keyboard transform modes', async ({ page }) =>
 	await page.keyboard.press('w');
 	await expect(page.getByRole('button', { name: 'Move (W)', exact: true })).toHaveAttribute('aria-pressed', 'true');
 });
+
+for (const direction of ['+X', '-X', '+Y', '-Y', '+Z', '-Z']) {
+	test(`axis view gizmo aligns ${direction} without editing the model`, async ({ page }, testInfo) => {
+		if (direction === '-Y') {
+			await page.setViewportSize({ width: 390, height: 844 });
+			await page.getByRole('button', { name: 'Fit model (F)', exact: true }).click();
+		}
+		const helper = page.getByRole('group', { name: 'Align view with axis', exact: true });
+		const bounds = await helper.boundingBox();
+		const normalize = (vector) => vector.map((value) => value / Math.hypot(...vector));
+		const forward = normalize([-140, -110, -160]);
+		const right = normalize([160, 0, -140]);
+		const up = [right[1] * forward[2] - right[2] * forward[1], right[2] * forward[0] - right[0] * forward[2], right[0] * forward[1] - right[1] * forward[0]];
+		const axis = { X: 0, Y: 1, Z: 2 }[direction[1]];
+		const sign = direction[0] === '+' ? 1 : -1;
+		const original = await stl(page);
+		await page.mouse.click(bounds.x + 64 + 32 * right[axis] * sign, bounds.y + 64 - 32 * up[axis] * sign);
+		await expect(helper).toHaveAttribute('aria-description', `View from ${direction}`);
+		await expect(helper).toHaveAttribute('aria-busy', 'false');
+		await expect(page.getByRole('textbox', { name: 'Position X', exact: true })).toHaveValue('0');
+		await expect(page.getByRole('textbox', { name: 'Position Y', exact: true })).toHaveValue('6');
+		await expect(page.getByRole('textbox', { name: 'Rotation X', exact: true })).toHaveValue('0');
+		expect(await stl(page)).toEqual(original);
+		await page.screenshot({ path: testInfo.outputPath(`axis-${direction}.png`) });
+		const canvas = await page.locator('canvas').boundingBox();
+		await page.mouse.move(canvas.x + 10, canvas.y + 100);
+		await page.mouse.down();
+		await page.mouse.move(canvas.x + 40, canvas.y + (direction === '+Y' ? 50 : 150), { steps: 12 });
+		await page.mouse.up();
+		await expect(helper).toHaveAttribute('aria-description', 'Orbit view');
+	});
+}
 
 test('rotation gizmo commits a quaternion and custom axes are editable', async ({ page }) => {
 	await page.getByRole('button', { name: 'Rotate (E)', exact: true }).click();

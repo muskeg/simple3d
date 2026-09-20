@@ -54,6 +54,36 @@ test('inset depth is independent of extrusion height', () => {
 	geometry.dispose();
 });
 
+test('flush pocket follows the rotated anchor and uses its own depth', () => {
+	const geometry = new THREE.BoxGeometry(4, 1, 4);
+	const rotated = { ...object, extrudeHeight: 0.5, inlayDepth: 3.25, pos: { x: 7, y: 11, z: -5 }, rot: { x: 32, y: 47, z: -19 } };
+	const brush = placeObject(geometry, rotated, settings, 'flush_inlay');
+	const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternionFromRot(rotated.rot));
+	const anchor = new THREE.Vector3(rotated.pos.x, rotated.pos.y, rotated.pos.z);
+	const depths = Array.from({ length: geometry.attributes.position.count }, (_, index) => new THREE.Vector3().fromBufferAttribute(geometry.attributes.position, index).applyMatrix4(brush.matrixWorld).sub(anchor).dot(normal));
+	near(Math.min(...depths), -3.25);
+	near(Math.max(...depths), 0.05);
+	geometry.dispose();
+});
+
+test('six independently depth-controlled dice inlays stay in their own face pockets', () => {
+	const config = { ...settings, width: 20, height: 20, depth: 20, cornerRadius: 0, chamfer: 0, mode: 'flush_inlay' };
+	const objects = ['top', 'bottom', 'front', 'back', 'left', 'right'].map((face, index) => ({ ...object, id: index + 1, fontSize: 4, extrudeHeight: 0.5, inlayDepth: (index + 1) * 0.5, ...facePlacementPreset(face, config) }));
+	const group = buildModel({ ...config, objects }, font);
+	assert.equal(group.children.length, 7);
+	for (const entry of objects) {
+		const mesh = group.getObjectByName(`Inlay_${entry.id}`);
+		assert.ok(mesh);
+		const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternionFromRot(entry.rot));
+		const positions = mesh.geometry.attributes.position;
+		const distances = Array.from({ length: positions.count }, (_, index) => new THREE.Vector3().fromBufferAttribute(positions, index).dot(normal));
+		near(Math.min(...distances), 10 - entry.inlayDepth);
+		near(Math.max(...distances), 10);
+	}
+	near(volume(group), 8000, 0.01);
+	disposeGroup(group);
+});
+
 test('empty text creates no substituted geometry', () => {
 	assert.equal(createTextGeometry('  ', font, object), null);
 });

@@ -295,7 +295,11 @@ export default function ControlPanel({
 							</div>
 						)}
 						<NumberField label={selected.type === 'image' ? 'Mask Width' : 'Font Size'} value={selected.fontSize} min={1} max={300} step={0.5} suffix=" mm" onChange={(v) => updateObject(selected.id, { fontSize: v })} />
-							<NumberField label="Extrusion Height" value={selected.extrudeHeight} min={0.1} max={200} step={0.25} suffix=" mm" onChange={(v) => updateObject(selected.id, { extrudeHeight: v })} />
+							{s.mode === 'flush_inlay' ? (
+								<NumberField label="Inlay Depth" value={selected.inlayDepth ?? 2} min={0.1} max={100} step={0.25} suffix=" mm" onChange={(v) => updateObject(selected.id, { inlayDepth: v })} />
+							) : (
+								<NumberField label="Extrusion Height" value={selected.extrudeHeight} min={0.1} max={200} step={0.25} suffix=" mm" onChange={(v) => updateObject(selected.id, { extrudeHeight: v })} />
+							)}
 							{selected.type === 'text' && <NumberField label="Curve Segments" value={selected.curveSegments} min={2} max={32} hardMax={32} step={1} onChange={(v) => updateObject(selected.id, { curveSegments: Math.round(v) })} />}
 
 							<div className="border-t border-white/5 pt-3">

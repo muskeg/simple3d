@@ -71,6 +71,10 @@ bounding-box width.
 	actions on touch screens.
 - Drag empty viewport space to orbit; use the wheel/pinch gesture to zoom.
 	Orbiting below the model is supported.
+- Click an endpoint on the bottom-right axis gizmo to align the view from +X,
+	-X, +Y, -Y, +Z or -Z. The transition preserves the current orbit target and
+	camera distance. +Y is top, -Y bottom, +Z front, -Z back, +X right and -X left.
+	The gizmo tracks the camera as you orbit; it does not rotate model objects.
 - Position is the surface anchor in editor coordinates: X across, Y up, Z front.
 	Numeric rotations are Euler XYZ degrees; composed rotations and gizmo edits
 	are calculated with quaternions.
@@ -109,7 +113,22 @@ The operation mode applies to all objects:
 | --- | --- |
 | Raised | Union of the base and outward extrusions. Outward height is exact; 0.05 mm of inward overlap makes the surface connection robust. |
 | Inset | Cut inward by Inset Depth, independently of the object's raised extrusion height. A sufficiently deep cut can pierce the base. |
-| Flush Inlay | Full-thickness cut along each object's extrusion axis, plus a separate matching inlay part. Earlier objects own overlapping inlay volume. |
+| Flush Inlay | A pocket cut inward from each object's surface anchor by its own Inlay Depth, plus a separate matching inlay part flush with the base surface. Earlier objects own overlapping inlay volume. |
+
+In **Flush Inlay** mode, select a text or image object and set **Inlay Depth** in
+its object controls (default 2 mm, minimum 0.1 mm). This is independent of raised
+extrusion height and of other objects' depths. For a die, snap objects to the six
+faces and give each a shallow depth to preserve the core. Depth is measured along
+the object's inward extrusion axis, including on rotated faces. It is not
+automatically capped to local wall thickness: sufficiently deep or wide pockets
+can still intersect one another or pierce the base.
+
+The **Transparent base preview** toolbar toggle is available in every operation
+mode. It defaults to 60% base opacity and keeps its setting when you switch modes;
+turn it off for an opaque view. Separate inlays remain solid, making their depth
+and hidden faces easier to inspect. Raised objects share the base mesh and its
+opacity. This affects only the viewport; exported geometry and material colors
+are unchanged.
 
 **3MF is recommended.** It contains a single aligned assembly, named base/inlay
 components, shared vertex indices, and core base-material colors. Slicers may

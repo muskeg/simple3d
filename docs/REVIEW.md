@@ -129,3 +129,44 @@ A successful push to `main` (or manual run on `main`) publishes the checked
 `dist/` artifact via GitHub Pages. Failed tests prevent deployment; failure
 artifacts retain browser screenshots/traces. No remote push is performed by this
 review itself.
+
+## Depth-Controlled Inlays Follow-Up
+
+The user subsequently pushed the application to main and confirmed that slicer
+import works. They identified the original full-thickness flush inlay behavior
+as unsuitable for multi-face objects such as dice.
+
+Flush inlays now form surface-anchored pockets, with independent `inlayDepth`
+values for each text/image object (default 2 mm). The selected-object inspector
+shows Inlay Depth instead of the irrelevant raised Extrusion Height in flush
+mode. The cutter extends only 0.05 mm outside the anchor to cross the surface;
+the intersected inlay finishes at the actual base surface. Depth follows the
+object's quaternion orientation and does not recenter the cutter on the base.
+
+New regressions cover an arbitrary rotated anchor, six pockets of different
+depths on a cube, preservation of the original solid volume, and actual 3MF
+downloads containing independently controlled top/bottom inlay depths. The cube
+case uses depths of 0.5-3 mm on a 20 mm base, preserving its core. Excessive depths
+can still intentionally pierce the base or intersect another pocket; no automatic
+wall-thickness or collision constraint is implied.
+
+Follow-up verification passed: 39 numerical tests, the focused depth-control
+browser test, the production build and all 9 production browser tests. No new
+remote deployment or slicer validation was performed for this depth change.
+
+## Viewport Inspection Follow-Up
+
+All operation modes offer a translucent base preview (60% opacity) with a
+persistent toolbar toggle; separate inlays remain opaque. Raised objects share
+the base mesh's opacity. This is a display-only material change.
+A browser pixel test verifies that hidden inlays become visible and that the
+exported STL geometry is unchanged when the preview is toggled.
+
+A bottom-right Three.js ViewHelper provides clickable signed axis endpoints for
+animated camera alignment. It follows orbit orientation and preserves camera
+distance and the orbit target. Its overlay captures its own pointer gestures so
+axis clicks cannot drag objects. Orbit and transform controls are suspended only
+during alignment, and helper GPU resources are disposed with the viewport.
+Six browser cases verify alignment in each signed direction, unchanged object
+state/exports and recovery of free orbit; the bottom-view case also uses a mobile
+viewport. Negative endpoints are labelled and colored for the dark background.
