@@ -2,12 +2,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { FontLoader } from 'three/addons/loaders/FontLoader.js';
 import Viewport from './components/Viewport.jsx';
 import ControlPanel from './components/ControlPanel.jsx';
-import { buildModel, initGeometryEngine } from './lib/csg.js';
+import { buildModel, initGeometryEngine, withPrintLayout } from './lib/csg.js';
 import manifoldWasmURL from 'manifold-3d/manifold.wasm?url';
 import { export3MF, exportSTL, downloadBlob } from './lib/exporters.js';
 import { rotationPresetForFace, facePositionPreset, facePlacementPreset } from './lib/placement.js';
 import { preloadMaskImage } from './lib/mask.js';
+import { validateSvg } from './lib/svg.js';
+import { effectiveMode, objectBody } from './lib/objects.js';
+import { lidOrigin, shellEnabled, shellWall } from './lib/bodies.js';
 import { FONTS } from './lib/fonts.js';
+import { parseProject, serializeProject, MAX_PROJECT_BYTES } from './lib/project.js';
+import { PRESETS, presetSettings } from './lib/presets.js';
 
 let objectIdCounter = 0;
 function makeObject(overrides = {}) {
@@ -21,6 +26,9 @@ function makeObject(overrides = {}) {
 		curveSegments: 8,
 		extrudeHeight: 4,
 		inlayDepth: 2,
+		mode: 'inherit',
+		target: 'base',
+		mirror: false,
 		pos: facePositionPreset('top', { width: 100, depth: 60, height: 12 }),
 		rot: preset.rot,
 		face: 'top',
@@ -28,9 +36,18 @@ function makeObject(overrides = {}) {
 	};
 }
 
+const OBJECT_DEFAULTS = {
+	text: {},
+	shape: { shape: 'star', text: '', fontSize: 24, shapeHeight: 24, sides: 5, innerRatio: 0.5, cornerRadius: 0 },
+	hole: { text: '', holeDiameter: 5, head: 'none', headDiameter: 10, headDepth: 3 },
+};
+
+// Geometry keys that move faces, so face-snapped objects are re-snapped.
+const RESNAP_KEYS = ['baseShape', 'sides', 'tubeWall', 'shell', 'wall', 'openTop', 'lid', 'lidThickness', 'lipDepth'];
+
 const DEFAULT_SETTINGS = {
 	// Base plate
-	baseShape: 'box', // box | cylinder | sphere | cone | pyramid
+	baseShape: 'box', // see BASE_SHAPES
 	width: 100,
 	depth: 60,
 	height: 12,
@@ -38,6 +55,16 @@ const DEFAULT_SETTINGS = {
 	chamfer: 2.5,
 	chamferSegments: 1, // 1 = straight chamfer, >1 = round fillet
 	radialSegments: 64, // tessellation for cylinder/sphere/cone
+	sides: 6,
+	tubeWall: 3,
+	// Hollow shell + lid (box, cylinder, n-gon)
+	shell: false,
+	wall: 2,
+	openTop: true,
+	lid: false,
+	lidThickness: 2,
+	lipDepth: 4,
+	lidClearance: 0.2,
 	// Objects (text / image masks)
 	objects: [makeObject()],
 	// Mode: 'raised' | 'inset' | 'flush_inlay'
@@ -60,6 +87,7 @@ export default function App() {
 
 	const modelRef = useRef(null); // live model group (for export)
 	const timerRef = useRef(null);
+	const savedRef = useRef(DEFAULT_SETTINGS); // last saved/loaded/preset state, for the unsaved-changes prompt
 	const onModelRef = useCallback((group) => { modelRef.current = group; }, []);
 
 	// Load the typeface font once.
@@ -101,11 +129,18 @@ export default function App() {
 				const next = { ...s, [key]: v };
 				next.cornerRadius = Math.min(next.cornerRadius, Math.min(next.width, next.depth) / 2);
 				next.chamfer = Math.min(next.chamfer, Math.min(next.width, next.depth, next.height) * 0.45);
-				if (['width', 'height', 'depth', 'baseShape'].includes(key)) {
+				if (shellEnabled(next)) next.chamfer = Math.min(next.chamfer, shellWall(next) * 0.5);
+				const resnap = RESNAP_KEYS.includes(key);
+				if (resnap || ['width', 'height', 'depth'].includes(key)) {
 					next.objects = s.objects.map((object) => {
+						const target = object.target === 'lid' ? 'lid' : 'base';
+						if (target === 'lid' && !objectBody(object, next)) return object;
+						if (object.face !== 'auto' && (resnap || target === 'lid')) return { ...object, ...facePlacementPreset(object.face, next, target) };
+						if (resnap) return object;
+						const sx = next.width / s.width, sz = next.depth / s.depth;
+						if (target === 'lid') return { ...object, pos: { x: object.pos.x * sx, y: object.pos.y + lidOrigin(next) - lidOrigin(s), z: object.pos.z * sz } };
 						if (object.face === 'auto') return object;
-						if (key === 'baseShape') return { ...object, ...facePlacementPreset(object.face, next) };
-						return { ...object, pos: { x: object.pos.x * next.width / s.width, y: object.pos.y * next.height / s.height, z: object.pos.z * next.depth / s.depth }, rot: facePlacementPreset(object.face, next).rot };
+						return { ...object, pos: { x: object.pos.x * sx, y: object.pos.y * next.height / s.height, z: object.pos.z * sz }, rot: facePlacementPreset(object.face, next).rot };
 					});
 				}
 				return next;
@@ -124,12 +159,28 @@ export default function App() {
 
 	const addObject = useCallback(
 		(type = 'text') => {
-			const obj = makeObject({ type, font: settings.font, ...facePlacementPreset('top', settings) });
+			const obj = makeObject({ type, font: settings.font, ...OBJECT_DEFAULTS[type], ...facePlacementPreset('top', settings) });
 			setSettings((s) => ({ ...s, objects: [...s.objects, obj] }));
 			setSelectedId(obj.id);
 		},
 		[settings],
 	);
+
+	const addSvgObject = useCallback((svg) => {
+		validateSvg(svg);
+		const obj = makeObject({ type: 'svg', svg, text: 'SVG', fontSize: 40, ...facePlacementPreset('top', settings) });
+		setSettings((s) => ({ ...s, objects: [...s.objects, obj] }));
+		setSelectedId(obj.id);
+	}, [settings]);
+
+	const setObjectSvg = useCallback((id, svg) => {
+		validateSvg(svg);
+		setSettings((s) => ({ ...s, objects: s.objects.map((o) => (o.id === id ? { ...o, svg } : o)) }));
+	}, []);
+
+	const setObjectTarget = useCallback((id, target) => {
+		setSettings((s) => ({ ...s, objects: s.objects.map((o) => (o.id === id ? { ...o, target, ...facePlacementPreset('top', s, target) } : o)) }));
+	}, []);
 
 	const addImageObject = useCallback(async (dataURL) => {
 		await preloadMaskImage(dataURL);
@@ -163,19 +214,56 @@ export default function App() {
 				o.id === id
 					? {
 							...o,
-							...facePlacementPreset(face, s),
+							...facePlacementPreset(face, s, objectBody(o, s) || 'base'),
 						}
 					: o,
 			),
 		}));
 	}, []);
 
+	const replaceSettings = useCallback((next) => {
+		savedRef.current = next;
+		setSettings(next);
+		setSelectedId(next.objects[0]?.id ?? null);
+	}, []);
+
+	const onSaveProject = useCallback(() => {
+		downloadBlob(new Blob([serializeProject(settings)], { type: 'application/json' }), 'simple3d-project.json');
+		savedRef.current = settings;
+	}, [settings]);
+
+	const onLoadProject = useCallback(async (file) => {
+		if (file.size > MAX_PROJECT_BYTES) throw new Error('Project file is too large.');
+		if (settings !== savedRef.current && !window.confirm('Discard unsaved changes and open this project?')) return;
+		const { settings: next, maxId } = parseProject(await file.text(), DEFAULT_SETTINGS);
+		for (const object of next.objects) {
+			if (object.type === 'image') await preloadMaskImage(object.image);
+			if (object.type === 'svg') validateSvg(object.svg);
+		}
+		objectIdCounter = Math.max(objectIdCounter, maxId);
+		replaceSettings(next);
+	}, [settings, replaceSettings]);
+
+	const onApplyPreset = useCallback((id) => {
+		const preset = PRESETS.find((entry) => entry.id === id);
+		if (!preset) return;
+		if (settings !== savedRef.current && !window.confirm(`Replace the current design with the ${preset.label} preset?`)) return;
+		replaceSettings(presetSettings(id, DEFAULT_SETTINGS, (fields) => makeObject({ ...OBJECT_DEFAULTS[fields.type || 'text'], ...fields })));
+	}, [settings, replaceSettings]);
+
+	const warning = shellEnabled(settings) && settings.objects.some((o) => {
+		const mode = effectiveMode(o, settings);
+		const depth = mode === 'inset' ? o.insetDepth ?? settings.insetDepth : mode === 'flush_inlay' ? o.inlayDepth ?? 2 : 0;
+		return objectBody(o, settings) === 'base' && depth >= shellWall(settings);
+	}) ? 'An inset or inlay is as deep as the shell wall and may break through.' : null;
+
 	const ready = !!model && builtSettings === settings && !building && !error && !fontError;
 	const onExport3MF = useCallback(async () => {
 		if (!modelRef.current || exporting || !ready) return;
 		setExporting(true);
 		try {
-			const blob = await export3MF(modelRef.current);
+			// export3MF serializes synchronously before its first await, so the layout is restored safely.
+			const blob = await withPrintLayout(modelRef.current, () => export3MF(modelRef.current));
 			downloadBlob(blob, 'simple3d-model.3mf');
 		} catch (e) {
 			console.error(e);
@@ -188,7 +276,7 @@ export default function App() {
 	const onExportSTL = useCallback(() => {
 		if (!modelRef.current || !ready) return;
 		try {
-			const ab = exportSTL(modelRef.current);
+			const ab = withPrintLayout(modelRef.current, () => exportSTL(modelRef.current));
 			downloadBlob(new Blob([ab], { type: 'model/stl' }), 'simple3d-model.stl');
 		} catch (e) {
 			console.error(e);
@@ -206,6 +294,9 @@ export default function App() {
 				addObject={addObject}
 				addImageObject={addImageObject}
 				setObjectImage={setObjectImage}
+				addSvgObject={addSvgObject}
+				setObjectSvg={setObjectSvg}
+				setObjectTarget={setObjectTarget}
 				duplicateObject={duplicateObject}
 				removeObject={removeObject}
 				snapToFace={snapToFace}
@@ -213,9 +304,13 @@ export default function App() {
 				setSelectedId={setSelectedId}
 				onExport3MF={onExport3MF}
 				onExportSTL={onExportSTL}
+				onSaveProject={onSaveProject}
+				onLoadProject={onLoadProject}
+				onApplyPreset={onApplyPreset}
 				building={building}
 				exporting={exporting}
 				error={error}
+				warning={warning}
 				fontError={fontError}
 				ready={ready}
 			/>

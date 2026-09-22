@@ -3,13 +3,11 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
-import { Move3D, Rotate3D, Magnet, Maximize, Blend } from 'lucide-react';
+import { Move3D, Rotate3D, Magnet, Maximize, Blend, PackageOpen } from 'lucide-react';
 import { disposeGroup } from '../lib/csg.js';
 import { placeObject } from '../lib/csg.js';
-import { createBaseGeometry } from '../lib/baseShapes.js';
-import { createTextGeometry } from '../lib/geometry.js';
-import { getMaskGeometry } from '../lib/mask.js';
-import { objectFont } from '../lib/fonts.js';
+import { createBodyGeometry, lidEnabled } from '../lib/bodies.js';
+import { createObjectGeometry, objectBody } from '../lib/objects.js';
 import { quaternionFromRot, rotFromQuaternion, surfacePlacement } from '../lib/placement.js';
 
 export default function Viewport({ model, onModelRef, settings, fonts, selectedId, onSelect, onUpdate }) {
@@ -21,7 +19,10 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 	const [mode, setMode] = useState('translate');
 	const [snap, setSnap] = useState(true);
 	const [transparentBase, setTransparentBase] = useState(true);
+	const [printLayout, setPrintLayout] = useState(false);
 	const [viewportError, setViewportError] = useState(null);
+	const hasLid = lidEnabled(settings);
+	const showLayout = printLayout && hasLid;
 	latest.current = { settings, fonts, selectedId, onSelect, onUpdate, snap };
 
 	// One-time scene / renderer / controls setup.
@@ -187,7 +188,7 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 			directDrag.moved = true;
 			cast(event);
 			const root = directDrag.root;
-			const surface = threeRef.current.surface;
+			const surface = threeRef.current.surfaces[root.userData.body];
 			const hit = latest.current.snap && surface ? raycaster.intersectObject(surface)[0] : null;
 			if (hit) {
 				const placement = surfacePlacement(hit.point, hit.face.normal, directDrag.rotation);
@@ -274,7 +275,7 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 		const ro = new ResizeObserver(resize);
 		ro.observe(mount);
 
-		threeRef.current = { scene, renderer, controls, container, camera, proxies, transform, select, fit, grid, surface: null, fitted: false, isDragging: () => gizmoDragging || !!directDrag };
+		threeRef.current = { scene, renderer, controls, container, camera, proxies, transform, select, fit, grid, surfaces: {}, fitted: false, isDragging: () => gizmoDragging || !!directDrag };
 
 		return () => {
 			cancelAnimationFrame(raf);
@@ -288,8 +289,10 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 			outline.geometry.dispose();
 			outline.material.dispose();
 			disposeGroup(proxies);
-			threeRef.current?.surface?.geometry.dispose();
-			threeRef.current?.surface?.material.dispose();
+			for (const surface of Object.values(threeRef.current?.surfaces || {})) {
+				surface.geometry.dispose();
+				surface.material.dispose();
+			}
 			canvas.removeEventListener('pointerdown', pointerDown, true);
 			canvas.removeEventListener('pointermove', pointerMove);
 			canvas.removeEventListener('pointerup', pointerUp);
@@ -325,14 +328,29 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 	}, [model, onModelRef]);
 
 	useEffect(() => {
-		const base = model?.getObjectByName('Base_Mesh');
-		if (!base) return;
+		if (!model) return;
 		const translucent = transparentBase;
-		base.material.transparent = translucent;
-		base.material.opacity = translucent ? 0.6 : 1;
-		base.material.depthWrite = !translucent;
-		base.material.needsUpdate = true;
+		for (const name of ['Base_Mesh', 'Lid_Mesh']) {
+			const body = model.getObjectByName(name);
+			if (!body) continue;
+			body.material.transparent = translucent;
+			body.material.opacity = translucent ? 0.6 : 1;
+			body.material.depthWrite = !translucent;
+			body.material.needsUpdate = true;
+		}
 	}, [model, transparentBase]);
+
+	useEffect(() => {
+		const lid = model?.getObjectByName('Lid');
+		if (!lid) return;
+		if (showLayout && lid.userData.printMatrix) lid.userData.printMatrix.decompose(lid.position, lid.quaternion, lid.scale);
+		else {
+			lid.position.set(0, 0, 0);
+			lid.quaternion.identity();
+			lid.scale.set(1, 1, 1);
+		}
+		lid.updateMatrixWorld(true);
+	}, [model, showLayout]);
 
 	useEffect(() => {
 		const state = threeRef.current;
@@ -340,21 +358,30 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 		state.transform.detach();
 		disposeGroup(state.proxies);
 		state.proxies.clear();
-		state.surface?.geometry.dispose();
-		state.surface?.material.dispose();
-		state.surface = new THREE.Mesh(createBaseGeometry(settings), new THREE.MeshBasicMaterial());
+		for (const surface of Object.values(state.surfaces)) {
+			surface.geometry.dispose();
+			surface.material.dispose();
+		}
+		state.surfaces = {};
+		try {
+			state.surfaces.base = new THREE.Mesh(createBodyGeometry(settings, 'base'), new THREE.MeshBasicMaterial());
+			if (lidEnabled(settings) && !showLayout) state.surfaces.lid = new THREE.Mesh(createBodyGeometry(settings, 'lid'), new THREE.MeshBasicMaterial());
+		} catch { /* build errors are reported by the model pipeline */ }
 		state.grid.position.y = -settings.height / 2 - 0.2;
 		for (const object of settings.objects) {
+			const body = objectBody(object, settings);
+			if (!body || (body === 'lid' && showLayout)) continue;
 			let geometry;
 			try {
-				geometry = object.type === 'image' ? getMaskGeometry(object)?.clone() : createTextGeometry(object.text, objectFont(fonts, object, settings), object);
+				geometry = createObjectGeometry(object, fonts, settings, 1);
 			} catch { continue; }
 			if (!geometry) continue;
 			const root = new THREE.Group();
 			root.userData.id = object.id;
+			root.userData.body = body;
 			root.position.set(object.pos.x, object.pos.y, object.pos.z);
 			root.quaternion.copy(quaternionFromRot(object.rot));
-			const brush = placeObject(geometry, object, settings, settings.mode);
+			const brush = placeObject(geometry, object, settings);
 			const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0x55ddcc, transparent: true, opacity: 0, depthWrite: false, depthTest: false }));
 			mesh.position.copy(brush.position).sub(root.position).applyQuaternion(root.quaternion.clone().invert());
 			mesh.scale.copy(brush.scale);
@@ -363,7 +390,7 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 		}
 		state.proxies.updateMatrixWorld(true);
 		state.select(latest.current.selectedId);
-	}, [settings, fonts]);
+	}, [settings, fonts, showLayout]);
 
 	useEffect(() => { threeRef.current?.select(selectedId); }, [selectedId]);
 	useEffect(() => { threeRef.current?.transform.setMode(mode); }, [mode]);
@@ -379,6 +406,7 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 				<button title="Snap to surface" aria-label="Snap to surface" aria-pressed={snap} onClick={() => setSnap(!snap)} className={`h-9 w-9 grid place-items-center rounded ${snap ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-700'}`}><Magnet size={18} /></button>
 				<button title="Fit model (F)" aria-label="Fit model (F)" onClick={() => threeRef.current?.fit()} className="h-9 w-9 grid place-items-center rounded text-neutral-300 hover:bg-neutral-700"><Maximize size={18} /></button>
 				<button title="Transparent base preview" aria-label="Transparent base preview" aria-pressed={transparentBase} onClick={() => setTransparentBase(!transparentBase)} className={`h-9 w-9 grid place-items-center rounded ${transparentBase ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-700'}`}><Blend size={18} /></button>
+				{hasLid && <button title="Lay out for print" aria-label="Lay out for print" aria-pressed={showLayout} onClick={() => setPrintLayout(!printLayout)} className={`h-9 w-9 grid place-items-center rounded ${showLayout ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-700'}`}><PackageOpen size={18} /></button>}
 			</div>
 			{viewportError && <p role="alert" className="absolute bottom-4 left-4 right-4 bg-red-950 p-3 text-sm">{viewportError}</p>}
 		</div>

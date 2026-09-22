@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createBaseGeometry } from './baseShapes.js';
+import { createBodyGeometry } from './bodies.js';
 
 /**
  * Placement math for model objects (text / image masks).
@@ -115,14 +115,34 @@ export function surfacePlacement(point, normal, rot) {
 	return { pos: { x: point.x, y: point.y, z: point.z }, rot: rotFromQuaternion(quaternion), face: 'auto' };
 }
 
-export function facePlacementPreset(face, settings) {
-	const geometry = createBaseGeometry(settings);
-	const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
+export function facePlacementPreset(face, settings, target = 'base') {
+	const geometry = createBodyGeometry(settings, target);
 	const preset = rotationPresetForFace(face);
+	if (!geometry) return { pos: facePositionPreset(face, settings), rot: preset.rot, face };
+	const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
+	geometry.computeBoundingBox();
+	const center = geometry.boundingBox.getCenter(new THREE.Vector3());
+	const size = geometry.boundingBox.getSize(new THREE.Vector3());
 	const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(preset.quaternion);
-	const distance = Math.hypot(settings.width, settings.height, settings.depth) + 1;
-	const ray = new THREE.Raycaster(normal.clone().multiplyScalar(distance), normal.clone().negate());
-	const hit = ray.intersectObject(mesh)[0];
+	const across = new THREE.Vector3(1, 0, 0).applyQuaternion(preset.quaternion);
+	const distance = size.length() + 1;
+	const ray = new THREE.Raycaster();
+	const castAt = (offset) => {
+		ray.set(center.clone().addScaledVector(across, offset).addScaledVector(normal, distance), normal.clone().negate());
+		return ray.intersectObject(mesh)[0];
+	};
+	let hit = castAt(0);
+	if (!hit) {
+		// Hollow centers (tube, torus): land in the middle of the first solid band beside the center.
+		const half = Math.abs(across.dot(size)) / 2;
+		const band = [];
+		for (let step = 1; step <= 96; step++) {
+			const offset = half * step / 96;
+			if (castAt(offset)) band.push(offset);
+			else if (band.length) break;
+		}
+		if (band.length) hit = castAt(band[Math.floor(band.length / 2)]);
+	}
 	const placement = hit ? surfacePlacement(hit.point, hit.face.normal, preset.rot) : { pos: facePositionPreset(face, settings), rot: preset.rot };
 	geometry.dispose();
 	mesh.material.dispose();

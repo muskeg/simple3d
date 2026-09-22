@@ -39,6 +39,13 @@ async function stl(page) {
 	});
 }
 
+async function modelXml(page) {
+	const pending = page.waitForEvent('download');
+	await page.getByRole('button', { name: 'Download .3MF', exact: true }).click();
+	const zip = await JSZip.loadAsync(await readFile(await (await pending).path()));
+	return zip.file('3D/3dmodel.model').async('string');
+}
+
 test.beforeEach(async ({ page }) => {
 	page.on('pageerror', (error) => { throw error; });
 	await page.goto('./');
@@ -58,7 +65,7 @@ test('numeric edits, cancellation, exact exported dimensions and empty base', as
 	await expect(field).toHaveValue('1200.125');
 	await field.fill('Infinity'); await field.press('Enter');
 	await expect(field).toHaveValue('1200.125');
-	for (const shape of ['Box', 'Cylinder', 'Sphere', 'Cone', 'Pyramid']) {
+	for (const shape of ['Box', 'Cylinder', 'Sphere', 'Cone', 'Pyramid', 'N-gon', 'Tube', 'Torus']) {
 		await page.getByRole('button', { name: shape, exact: true }).click();
 		await ready(page);
 		const mesh = await stl(page);
@@ -337,3 +344,100 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
 		await page.screenshot({ path: testInfo.outputPath(`editor-${viewport.width}.png`) });
 	});
 }
+
+test('shapes, holes, SVG outlines, per-object modes and mirroring', async ({ page }) => {
+	await page.getByRole('button', { name: 'Delete ABC', exact: true }).click();
+	await ready(page);
+	const base = await stl(page);
+	await page.getByRole('button', { name: 'Add Shape', exact: true }).click();
+	await ready(page);
+	await page.getByRole('combobox', { name: 'Shape Kind', exact: true }).selectOption('heart');
+	await ready(page);
+	const heart = await stl(page);
+	expect(heart.triangles).toBeGreaterThan(base.triangles);
+	expect(heart.size[2]).toBeCloseTo(16, 3);
+	await page.getByRole('combobox', { name: 'Object Mode', exact: true }).selectOption('inset');
+	await expect(page.getByRole('textbox', { name: 'Extrusion Height', exact: true })).toHaveCount(0);
+	await number(page, 'Object Inset Depth', 3);
+	expect((await stl(page)).size[2]).toBeCloseTo(12, 3);
+	await page.getByRole('checkbox', { name: 'Mirror (for stamps)', exact: true }).check();
+	await ready(page);
+
+	await page.getByRole('button', { name: 'Add Hole', exact: true }).click();
+	await number(page, 'Hole Diameter', 8);
+	await number(page, 'Position X', 35);
+	const plain = await stl(page);
+	await page.getByRole('combobox', { name: 'Hole Head', exact: true }).selectOption('countersink');
+	await number(page, 'Head Diameter', 14);
+	expect((await stl(page)).triangles).not.toEqual(plain.triangles);
+	await expect(page.getByTestId('object-row')).toHaveCount(2);
+
+	const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"><rect x="0" y="0" width="12" height="10"/><rect x="8" y="2" width="12" height="6"/><script>window.pwned = true</script></svg>';
+	await page.locator('#svg-file-input').setInputFiles({ name: 'logo.svg', mimeType: 'image/svg+xml', buffer: Buffer.from(svg) });
+	await expect(page.getByRole('img', { name: 'svg outline', exact: true })).toBeVisible();
+	await ready(page);
+	await number(page, 'SVG Width', 20);
+	await number(page, 'Position X', -30);
+	expect(await page.evaluate(() => window.pwned)).toBeUndefined();
+	await page.locator('#svg-file-input').setInputFiles({ name: 'bad.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>') });
+	await expect(page.getByRole('alert')).toContainText('no filled shapes');
+	await expect(page.getByTestId('object-row')).toHaveCount(3);
+});
+
+test('hollow shell with lid exports a separate lid laid out for printing', async ({ page }) => {
+	await number(page, 'Height', 30);
+	await page.getByRole('checkbox', { name: 'Hollow shell', exact: true }).check();
+	await ready(page);
+	await page.getByRole('checkbox', { name: 'Add lid', exact: true }).check();
+	await ready(page);
+	const toggle = page.getByRole('button', { name: 'Lay out for print', exact: true });
+	await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+	const exported = await stl(page);
+	expect(exported.size[0]).toBeCloseTo(210, 2);
+	expect(exported.size[2]).toBeCloseTo(30, 2);
+	await toggle.click();
+	await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+	expect(await stl(page)).toEqual(exported);
+	await toggle.click();
+
+	await page.getByRole('combobox', { name: 'Body', exact: true }).selectOption('lid');
+	await ready(page);
+	const xml = await modelXml(page);
+	expect(xml.match(/<item /g)).toHaveLength(2);
+	expect(xml).toContain('name="Lid_Mesh"');
+	expect(xml).toContain('name="Simple3D_Lid"');
+
+	await page.getByRole('combobox', { name: 'Body', exact: true }).selectOption('base');
+	await page.getByRole('combobox', { name: 'Object Mode', exact: true }).selectOption('inset');
+	await number(page, 'Object Inset Depth', 2);
+	await expect(page.getByRole('status')).toContainText('break through');
+	await number(page, 'Object Inset Depth', 1);
+	await expect(page.getByRole('status')).toHaveCount(0);
+});
+
+test('presets and project save/load round-trip', async ({ page }) => {
+	page.on('dialog', (dialog) => dialog.accept());
+	await page.getByRole('combobox', { name: 'Preset', exact: true }).selectOption('box');
+	await ready(page);
+	await expect(page.getByTestId('object-row')).toHaveCount(2);
+	await expect(page.getByRole('textbox', { name: 'Lid Thickness', exact: true })).toHaveValue('2.4');
+	await number(page, 'Width', 90);
+	const pending = page.waitForEvent('download');
+	await page.getByRole('button', { name: 'Save project', exact: true }).click();
+	const saved = await readFile(await (await pending).path());
+	expect(JSON.parse(saved.toString()).app).toBe('simple3d');
+
+	await page.getByRole('combobox', { name: 'Preset', exact: true }).selectOption('dice');
+	await ready(page);
+	await expect(page.getByTestId('object-row')).toHaveCount(6);
+	expect((await modelXml(page)).match(/name="Inlay_/g)).toHaveLength(6);
+
+	await page.locator('#project-file-input').setInputFiles({ name: 'project.json', mimeType: 'application/json', buffer: saved });
+	await ready(page);
+	await expect(page.getByTestId('object-row')).toHaveCount(2);
+	await expect(page.getByRole('textbox', { name: 'Width', exact: true })).toHaveValue('90');
+	await expect(page.getByRole('checkbox', { name: 'Add lid', exact: true })).toBeChecked();
+	await page.locator('#project-file-input').setInputFiles({ name: 'broken.json', mimeType: 'application/json', buffer: Buffer.from('nope') });
+	await expect(page.getByRole('alert')).toContainText('not valid JSON');
+	await expect(page.getByTestId('object-row')).toHaveCount(2);
+});

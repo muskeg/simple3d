@@ -1,19 +1,46 @@
 import React from 'react';
 import NumberField from './NumberField.jsx';
 import { rotateAboutWorldAxis } from '../lib/placement.js';
-import { BASE_SHAPES } from '../lib/baseShapes.js';
+import { BASE_SHAPES, SHELL_SHAPES } from '../lib/baseShapes.js';
 import { FONTS } from '../lib/fonts.js';
-import { Copy, Trash2, Image, Type, Download } from 'lucide-react';
+import { SHAPE_KINDS } from '../lib/shapes2d.js';
+import { MAX_SVG_BYTES } from '../lib/svg.js';
+import { OBJECT_MODES, HOLE_HEADS, effectiveMode, objectLabel } from '../lib/objects.js';
+import { lidEnabled, shellEnabled } from '../lib/bodies.js';
+import { PRESETS } from '../lib/presets.js';
+import { Copy, Trash2, Image, Type, Download, Shapes, CircleDot, FileCode, Save, FolderOpen, ChevronRight } from 'lucide-react';
 
 function Section({ title, children, hint }) {
 	return (
-		<section className="border-b border-white/5 px-4 py-4">
-			<h2 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-indigo-300/80">
-				{title}
-			</h2>
-			{hint && <p className="mb-3 text-xs leading-relaxed text-neutral-500">{hint}</p>}
-			<div className="space-y-3.5">{children}</div>
-		</section>
+		<details open className="group border-b border-white/5 px-4 py-4">
+			<summary className="flex cursor-pointer list-none items-center gap-1 [&::-webkit-details-marker]:hidden">
+				<ChevronRight size={12} className="text-indigo-300/70 transition-transform group-open:rotate-90" />
+				<h2 className="text-[11px] font-semibold uppercase tracking-wider text-indigo-300/80">{title}</h2>
+			</summary>
+			<div className="mt-3">
+				{hint && <p className="mb-3 text-xs leading-relaxed text-neutral-500">{hint}</p>}
+				<div className="space-y-3.5">{children}</div>
+			</div>
+		</details>
+	);
+}
+
+function Checkbox({ label, checked, onChange }) {
+	return (
+		<label className="flex cursor-pointer items-center gap-2 text-xs text-neutral-300">
+			<input type="checkbox" checked={!!checked} onChange={(e) => onChange(e.target.checked)} className="h-3.5 w-3.5 rounded border-neutral-600 bg-neutral-800 accent-indigo-500" />
+			{label}
+		</label>
+	);
+}
+
+function Select({ label, value, onChange, options }) {
+	return (
+		<label className="block text-xs text-neutral-300">{label}
+			<select aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1.5">
+				{options.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+			</select>
+		</label>
 	);
 }
 
@@ -24,6 +51,16 @@ const MODES = [
 ];
 
 const FACE_BUTTONS = ['top', 'bottom', 'front', 'back', 'left', 'right'];
+
+const ADD_BUTTONS = [
+	{ type: 'text', label: 'Text', aria: 'Add Text Object', Icon: Type },
+	{ type: 'image', label: 'Image', aria: 'Add Image Mask', Icon: Image },
+	{ type: 'svg', label: 'SVG', aria: 'Add SVG', Icon: FileCode },
+	{ type: 'shape', label: 'Shape', aria: 'Add Shape', Icon: Shapes },
+	{ type: 'hole', label: 'Hole', aria: 'Add Hole', Icon: CircleDot },
+];
+
+const TYPE_ICONS = { image: Image, svg: FileCode, shape: Shapes, hole: CircleDot };
 
 function readFileAsDataURL(file) {
 	return new Promise((resolve, reject) => {
@@ -42,6 +79,9 @@ export default function ControlPanel({
 	addObject,
 	addImageObject,
 	setObjectImage,
+	addSvgObject,
+	setObjectSvg,
+	setObjectTarget,
 	duplicateObject,
 	removeObject,
 	snapToFace,
@@ -49,17 +89,23 @@ export default function ControlPanel({
 	setSelectedId,
 	onExport3MF,
 	onExportSTL,
+	onSaveProject,
+	onLoadProject,
+	onApplyPreset,
 	building,
 	exporting,
 	error,
+	warning,
 	fontError,
 	ready,
 }) {
 	const s = settings;
 	const isFilleted = s.chamfer > 0 && s.chamferSegments > 1;
 	const selected = s.objects.find((o) => o.id === selectedId) || null;
+	const selectedMode = selected ? effectiveMode(selected, s) : null;
 	const [fileError, setFileError] = React.useState(null);
 	const [uploading, setUploading] = React.useState(false);
+	const hasLid = lidEnabled(s);
 
 	// Local axis+angle scratch state (applied on demand).
 	const [axis, setAxis] = React.useState('y');
@@ -95,6 +141,33 @@ export default function ControlPanel({
 		}
 	};
 
+	const onPickSvg = async (file, targetId = null) => {
+		if (!file) return;
+		setFileError(null);
+		try {
+			if (!/\.svg$/i.test(file.name) && file.type !== 'image/svg+xml') throw new Error('Choose an SVG file.');
+			if (file.size > MAX_SVG_BYTES) throw new Error('SVG exceeds the 2 MB limit.');
+			const text = await file.text();
+			if (targetId) setObjectSvg(targetId, text);
+			else addSvgObject(text);
+		} catch (error) {
+			setFileError(error.message || 'Unable to read SVG.');
+		}
+	};
+
+	const onPickProject = async (file) => {
+		if (!file) return;
+		setFileError(null);
+		setUploading(true);
+		try { await onLoadProject(file); } catch (error) { setFileError(error.message || 'Unable to open project.'); } finally { setUploading(false); }
+	};
+
+	const onAdd = (type) => {
+		if (type === 'image') document.getElementById('mask-file-input')?.click();
+		else if (type === 'svg') document.getElementById('svg-file-input')?.click();
+		else addObject(type);
+	};
+
 	return (
 		<aside className="flex h-[48%] w-full md:h-full md:w-[340px] shrink-0 flex-col border-r border-white/10 bg-neutral-900">
 			<header className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
@@ -107,12 +180,26 @@ export default function ControlPanel({
 					</span>
 				)}
 			</header>
+			<div className="flex items-center gap-1.5 border-b border-white/10 px-4 py-2">
+				<select
+					aria-label="Preset"
+					value=""
+					onChange={(event) => { if (event.target.value) onApplyPreset(event.target.value); }}
+					className="min-w-0 flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs text-neutral-200"
+				>
+					<option value="">Start from a preset…</option>
+					{PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+				</select>
+				<button onClick={onSaveProject} title="Save project" aria-label="Save project" className="grid h-7 w-7 place-items-center rounded border border-neutral-700 bg-neutral-800 text-neutral-300 hover:border-indigo-500 hover:text-indigo-200"><Save size={14} /></button>
+				<button onClick={() => document.getElementById('project-file-input')?.click()} disabled={uploading} title="Open project" aria-label="Open project" className="grid h-7 w-7 place-items-center rounded border border-neutral-700 bg-neutral-800 text-neutral-300 hover:border-indigo-500 hover:text-indigo-200"><FolderOpen size={14} /></button>
+				<input id="project-file-input" type="file" accept=".json,application/json" className="hidden" onChange={(e) => { onPickProject(e.target.files?.[0]); e.target.value = ''; }} />
+			</div>
 
 			<div className="panel-scroll flex-1 overflow-y-auto">
 				<Section title="Base Plate">
 					<div>
 						<label className="mb-1.5 block text-[11px] text-neutral-400">Shape</label>
-						<div className="grid grid-cols-5 gap-1">
+						<div className="grid grid-cols-4 gap-1">
 							{BASE_SHAPES.map((sh) => (
 								<button
 									key={sh.id}
@@ -135,7 +222,13 @@ export default function ControlPanel({
 					{s.baseShape === 'box' && (
 						<NumberField label="Corner Radius" value={s.cornerRadius} min={0} max={400} step={0.5} suffix=" mm" onChange={(v) => setNumber('cornerRadius')(v)} />
 					)}
-					{(s.baseShape === 'box' || s.baseShape === 'cylinder') && (
+					{s.baseShape === 'ngon' && (
+						<NumberField label="Sides" value={s.sides} min={3} max={12} hardMax={12} step={1} onChange={(v) => setNumber('sides')(Math.max(3, Math.round(v)))} />
+					)}
+					{s.baseShape === 'tube' && (
+						<NumberField label="Tube Wall" value={s.tubeWall} min={0.2} max={100} step={0.25} suffix=" mm" onChange={(v) => setNumber('tubeWall')(v)} />
+					)}
+					{['box', 'cylinder', 'ngon'].includes(s.baseShape) && (
 						<>
 							<NumberField label="Chamfer / Fillet" value={s.chamfer} min={0} max={100} step={0.25} suffix=" mm" onChange={(v) => setNumber('chamfer')(v)} />
 							{isFilleted && (
@@ -154,7 +247,7 @@ export default function ControlPanel({
 							)}
 						</>
 					)}
-					{s.baseShape !== 'box' && (
+					{!['box', 'ngon'].includes(s.baseShape) && (
 						<NumberField
 							label="Surface Segments"
 							value={s.radialSegments}
@@ -167,12 +260,38 @@ export default function ControlPanel({
 					)}
 				</Section>
 
+				<Section title="Shell & Lid" hint={SHELL_SHAPES.includes(s.baseShape) ? null : 'Hollow shells are available for Box, Cylinder and N-gon bases.'}>
+					{SHELL_SHAPES.includes(s.baseShape) && (
+						<>
+							<Checkbox label="Hollow shell" checked={s.shell} onChange={(v) => setNumber('shell')(v)} />
+							{shellEnabled(s) && (
+								<>
+									<NumberField label="Wall Thickness" value={s.wall} min={0.4} max={50} step={0.2} suffix=" mm" onChange={(v) => setNumber('wall')(v)} />
+									<Checkbox label="Open top" checked={s.openTop} onChange={(v) => setNumber('openTop')(v)} />
+									{s.openTop && <Checkbox label="Add lid" checked={s.lid} onChange={(v) => setNumber('lid')(v)} />}
+									{hasLid && (
+										<>
+											<NumberField label="Lid Thickness" value={s.lidThickness} min={0.4} max={50} step={0.2} suffix=" mm" onChange={(v) => setNumber('lidThickness')(v)} />
+											<NumberField label="Lip Depth" value={s.lipDepth} min={0} max={100} step={0.5} suffix=" mm" onChange={(v) => setNumber('lipDepth')(v)} />
+											<NumberField label="Lid Clearance" value={s.lidClearance} min={0} max={2} step={0.05} suffix=" mm" onChange={(v) => setNumber('lidClearance')(v)} />
+											<p className="text-[11px] leading-relaxed text-neutral-500">Exports lay the lid upside down beside the box, so raised details on the lid top face the bed.</p>
+										</>
+									)}
+								</>
+							)}
+						</>
+					)}
+				</Section>
+
 				<Section
 					title="Objects"
 				>
 					{/* Object list */}
 					<div className="space-y-1">
-						{s.objects.map((o) => (
+						{s.objects.map((o) => {
+							const label = objectLabel(o);
+							const Icon = TYPE_ICONS[o.type];
+							return (
 							<div
 								key={o.id}
 								data-testid="object-row"
@@ -184,19 +303,20 @@ export default function ControlPanel({
 							>
 								<button
 									onClick={() => setSelectedId(o.id)}
-									aria-label={`Select ${o.text || 'empty text'}`}
+									aria-label={`Select ${label}`}
 									aria-pressed={selectedId === o.id}
 									className="min-w-0 flex-1 truncate text-left text-xs text-neutral-200"
-									title={o.text}
+									title={label}
 								>
-									{o.type === 'image' && <Image size={12} className="mr-1 inline" />}
-									{o.text || `Object ${o.id}`}
+									{Icon && <Icon size={12} className="mr-1 inline" />}
+									{o.type === 'text' ? o.text || `Object ${o.id}` : label}
+									{o.target === 'lid' && <span className="ml-1 text-[10px] text-indigo-300/80">{hasLid ? 'lid' : 'lid (off)'}</span>}
 								</button>
 								<button
 									onClick={() => duplicateObject(o.id)}
 									className="rounded px-1 text-[11px] text-neutral-400 hover:bg-neutral-700 hover:text-neutral-100"
 									title="Duplicate"
-									aria-label={`Duplicate ${o.text || 'object'}`}
+									aria-label={`Duplicate ${o.type === 'text' ? o.text || 'object' : label}`}
 								>
 									<Copy size={14} />
 								</button>
@@ -204,28 +324,28 @@ export default function ControlPanel({
 									onClick={() => removeObject(o.id)}
 									className="rounded px-1 text-[11px] text-neutral-400 hover:bg-red-500/20 hover:text-red-300 disabled:opacity-30"
 									title="Delete"
-									aria-label={`Delete ${o.text || 'object'}`}
+									aria-label={`Delete ${o.type === 'text' ? o.text || 'object' : label}`}
 								>
 									<Trash2 size={14} />
 								</button>
 							</div>
-						))}
+							);
+						})}
 					</div>
 
-					<div className="flex gap-2">
-						<button
-							onClick={() => addObject('text')}
-							className="flex-1 rounded-md border border-dashed border-neutral-600 px-3 py-1.5 text-xs font-medium text-neutral-300 transition hover:border-indigo-500 hover:text-indigo-200"
-						>
-							<Type size={14} className="mr-1 inline" /> Add Text Object
-						</button>
-						<button
-							onClick={() => document.getElementById('mask-file-input')?.click()}
-							disabled={uploading}
-							className="flex-1 rounded-md border border-dashed border-neutral-600 px-3 py-1.5 text-xs font-medium text-neutral-300 transition hover:border-indigo-500 hover:text-indigo-200"
-						>
-							<Image size={14} className="mr-1 inline" /> {uploading ? 'Loading...' : 'Add Image Mask'}
-						</button>
+					<div className="grid grid-cols-5 gap-1">
+						{ADD_BUTTONS.map(({ type, label, aria, Icon }) => (
+							<button
+								key={type}
+								onClick={() => onAdd(type)}
+								disabled={type === 'image' && uploading}
+								aria-label={aria}
+								title={aria}
+								className="flex flex-col items-center gap-0.5 rounded-md border border-dashed border-neutral-600 px-1 py-1.5 text-[10px] font-medium text-neutral-300 transition hover:border-indigo-500 hover:text-indigo-200"
+							>
+								<Icon size={14} />{type === 'image' && uploading ? '…' : label}
+							</button>
+						))}
 						<input
 							id="mask-file-input"
 							type="file"
@@ -236,10 +356,26 @@ export default function ControlPanel({
 								e.target.value = '';
 							}}
 						/>
+						<input
+							id="svg-file-input"
+							type="file"
+							accept=".svg,image/svg+xml"
+							className="hidden"
+							onChange={(e) => {
+								onPickSvg(e.target.files?.[0]);
+								e.target.value = '';
+							}}
+						/>
 					</div>
 
 					{selected && (
 						<div key={selected.id} className="space-y-3.5 border-t border-neutral-700/60 pt-3">
+							{(hasLid || selected.target === 'lid') && (
+								<Select label="Body" value={selected.target === 'lid' ? 'lid' : 'base'} onChange={(target) => setObjectTarget(selected.id, target)} options={[{ id: 'base', label: 'Base' }, { id: 'lid', label: hasLid ? 'Lid' : 'Lid (disabled)' }]} />
+							)}
+							{selected.type !== 'hole' && (
+								<Select label="Object Mode" value={selected.mode || 'inherit'} onChange={(mode) => updateObject(selected.id, { mode })} options={OBJECT_MODES.map((m) => (m.id === 'inherit' ? { ...m, label: `Default (${MODES.find((g) => g.id === s.mode)?.label})` } : m))} />
+							)}
 							{selected.type === 'text' && <label className="block text-xs text-neutral-300">Font
 								<select aria-label="Font" value={selected.font || s.font} onChange={(event) => updateObject(selected.id, { font: event.target.value })} className="mt-1 w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1.5">
 									{FONTS.map((font) => <option key={font.id} value={font.id}>{font.label}</option>)}
@@ -294,12 +430,45 @@ export default function ControlPanel({
 								<NumberField label="Mask Resolution" value={selected.maskResolution ?? 256} min={64} max={1024} hardMax={1024} step={32} onChange={(v) => updateObject(selected.id, { maskResolution: Math.round(v) })} />
 							</div>
 						)}
-						<NumberField label={selected.type === 'image' ? 'Mask Width' : 'Font Size'} value={selected.fontSize} min={1} max={300} step={0.5} suffix=" mm" onChange={(v) => updateObject(selected.id, { fontSize: v })} />
-							{s.mode === 'flush_inlay' ? (
-								<NumberField label="Inlay Depth" value={selected.inlayDepth ?? 2} min={0.1} max={100} step={0.25} suffix=" mm" onChange={(v) => updateObject(selected.id, { inlayDepth: v })} />
-							) : (
-								<NumberField label="Extrusion Height" value={selected.extrudeHeight} min={0.1} max={200} step={0.25} suffix=" mm" onChange={(v) => updateObject(selected.id, { extrudeHeight: v })} />
-							)}
+						{selected.type === 'svg' && (
+							<div className="flex items-center gap-2">
+								{/* Rendered through <img>, where SVG scripts never run. */}
+								<img src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(selected.svg || '')}`} alt="svg outline" className="h-10 w-10 rounded border border-neutral-700 bg-neutral-200 object-contain" />
+								<button
+									onClick={() => document.getElementById(`replace-svg-${selected.id}`)?.click()}
+									className="rounded-md border border-neutral-600 bg-neutral-800 px-2.5 py-1 text-xs text-neutral-200 transition hover:border-indigo-500 hover:text-indigo-200"
+								>
+									Replace SVG…
+								</button>
+								<input id={`replace-svg-${selected.id}`} type="file" accept=".svg,image/svg+xml" className="hidden" onChange={(e) => { onPickSvg(e.target.files?.[0], selected.id); e.target.value = ''; }} />
+							</div>
+						)}
+						{selected.type === 'shape' && (
+							<>
+								<Select label="Shape Kind" value={selected.shape || 'circle'} onChange={(shape) => updateObject(selected.id, { shape })} options={SHAPE_KINDS} />
+								<NumberField label="Shape Height" value={selected.shapeHeight ?? selected.fontSize} min={0.5} max={300} step={0.5} suffix=" mm" onChange={(v) => updateObject(selected.id, { shapeHeight: v })} />
+								{['star', 'polygon'].includes(selected.shape) && <NumberField label={selected.shape === 'star' ? 'Star Points' : 'Polygon Sides'} value={selected.sides ?? 5} min={3} max={24} hardMax={24} step={1} onChange={(v) => updateObject(selected.id, { sides: Math.max(3, Math.round(v)) })} />}
+								{selected.shape === 'star' && <NumberField label="Inner Ratio" value={selected.innerRatio ?? 0.5} min={0.1} max={0.95} hardMax={0.95} step={0.05} onChange={(v) => updateObject(selected.id, { innerRatio: Math.max(0.1, v) })} />}
+								{selected.shape === 'rect' && <NumberField label="Shape Corner Radius" value={selected.cornerRadius ?? 0} min={0} max={150} step={0.5} suffix=" mm" onChange={(v) => updateObject(selected.id, { cornerRadius: v })} />}
+							</>
+						)}
+						{selected.type === 'hole' ? (
+							<>
+								<NumberField label="Hole Diameter" value={selected.holeDiameter ?? 5} min={0.2} max={200} step={0.1} suffix=" mm" onChange={(v) => updateObject(selected.id, { holeDiameter: v })} />
+								<Select label="Hole Head" value={selected.head || 'none'} onChange={(head) => updateObject(selected.id, { head })} options={HOLE_HEADS} />
+								{selected.head && selected.head !== 'none' && <NumberField label="Head Diameter" value={selected.headDiameter ?? 10} min={0.2} max={300} step={0.1} suffix=" mm" onChange={(v) => updateObject(selected.id, { headDiameter: v })} />}
+								{selected.head === 'counterbore' && <NumberField label="Head Depth" value={selected.headDepth ?? 3} min={0.1} max={100} step={0.1} suffix=" mm" onChange={(v) => updateObject(selected.id, { headDepth: v })} />}
+								<p className="text-[11px] leading-relaxed text-neutral-500">Holes cut straight through their body along the object axis, including inlays and raised objects.</p>
+							</>
+						) : (
+							<>
+								<NumberField label={{ image: 'Mask Width', svg: 'SVG Width', shape: 'Shape Width' }[selected.type] || 'Font Size'} value={selected.fontSize} min={1} max={300} step={0.5} suffix=" mm" onChange={(v) => updateObject(selected.id, { fontSize: v })} />
+								{selectedMode === 'flush_inlay' && <NumberField label="Inlay Depth" value={selected.inlayDepth ?? 2} min={0.1} max={100} step={0.25} suffix=" mm" onChange={(v) => updateObject(selected.id, { inlayDepth: v })} />}
+								{selectedMode === 'inset' && <NumberField label="Object Inset Depth" value={selected.insetDepth ?? s.insetDepth} min={0.1} max={100} step={0.25} suffix=" mm" onChange={(v) => updateObject(selected.id, { insetDepth: v })} />}
+								{selectedMode === 'raised' && <NumberField label="Extrusion Height" value={selected.extrudeHeight} min={0.1} max={200} step={0.25} suffix=" mm" onChange={(v) => updateObject(selected.id, { extrudeHeight: v })} />}
+								<Checkbox label="Mirror (for stamps)" checked={selected.mirror} onChange={(mirror) => updateObject(selected.id, { mirror })} />
+							</>
+						)}
 							{selected.type === 'text' && <NumberField label="Curve Segments" value={selected.curveSegments} min={2} max={32} hardMax={32} step={1} onChange={(v) => updateObject(selected.id, { curveSegments: Math.round(v) })} />}
 
 							<div className="border-t border-white/5 pt-3">
@@ -368,6 +537,7 @@ export default function ControlPanel({
 
 				<Section
 					title="Operation Mode"
+					hint="Applies to every object whose mode is Default."
 				>
 					<div className="grid grid-cols-1 gap-2">
 						{MODES.map((m) => (
@@ -393,6 +563,7 @@ export default function ControlPanel({
 			<footer className="space-y-2 border-t border-white/10 px-4 py-3">
 				{(error || fileError) && <p role="alert" className="rounded bg-red-500/15 px-2 py-1 text-[11px] text-red-300">{error || fileError}</p>}
 				{fontError && <p className="rounded bg-amber-500/15 px-2 py-1 text-[11px] text-amber-300">{fontError}</p>}
+				{warning && <p role="status" className="rounded bg-amber-500/15 px-2 py-1 text-[11px] text-amber-300">{warning}</p>}
 				<button
 					onClick={onExport3MF}
 					disabled={exporting || !ready || uploading}

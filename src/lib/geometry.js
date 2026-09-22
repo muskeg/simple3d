@@ -1,6 +1,31 @@
 import * as THREE from 'three';
 import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
 
+/** Counter-clockwise rounded rectangle centered on the origin. */
+export function roundedRectShape(w, d, r) {
+	const shape = new THREE.Shape();
+	const hw = w / 2;
+	const hd = d / 2;
+	if (r <= 0) {
+		shape.moveTo(-hw, -hd);
+		shape.lineTo(hw, -hd);
+		shape.lineTo(hw, hd);
+		shape.lineTo(-hw, hd);
+		shape.closePath();
+		return shape;
+	}
+	shape.moveTo(-hw + r, -hd);
+	shape.lineTo(hw - r, -hd);
+	shape.absarc(hw - r, -hd + r, r, -Math.PI / 2, 0, false);
+	shape.lineTo(hw, hd - r);
+	shape.absarc(hw - r, hd - r, r, 0, Math.PI / 2, false);
+	shape.lineTo(-hw + r, hd);
+	shape.absarc(-hw + r, hd - r, r, Math.PI / 2, Math.PI, false);
+	shape.lineTo(-hw, -hd + r);
+	shape.absarc(-hw + r, -hd + r, r, Math.PI, Math.PI * 1.5, false);
+	return shape;
+}
+
 /**
  * Builds the base plate geometry.
  *
@@ -22,29 +47,7 @@ export function createBaseGeometry({ width, depth, height, cornerRadius, chamfer
 	const r = Math.max(0, Math.min(cornerRadius || 0, w / 2, d / 2));
 	const c = Math.min(Math.max(0, chamfer || 0), (Math.min(w, d) / 2) * 0.9, (h / 2) * 0.9);
 
-	const shape = new THREE.Shape();
-	const hw = w / 2;
-	const hd = d / 2;
-
-	// Rounded rectangle path (counter-clockwise).
-	if (r === 0) {
-		shape.moveTo(-hw, -hd);
-		shape.lineTo(hw, -hd);
-		shape.lineTo(hw, hd);
-		shape.lineTo(-hw, hd);
-		shape.closePath();
-	} else {
-	shape.moveTo(-hw + r, -hd);
-	shape.lineTo(hw - r, -hd);
-	shape.absarc(hw - r, -hd + r, r, -Math.PI / 2, 0, false);
-	shape.lineTo(hw, hd - r);
-	shape.absarc(hw - r, hd - r, r, 0, Math.PI / 2, false);
-	shape.lineTo(-hw + r, hd);
-	shape.absarc(-hw + r, hd - r, r, Math.PI / 2, Math.PI, false);
-	shape.lineTo(-hw, -hd + r);
-	shape.absarc(-hw + r, -hd + r, r, Math.PI, Math.PI * 1.5, false);
-	}
-
+	const shape = roundedRectShape(w, d, r);
 	const segments = Math.max(1, Math.round(chamferSegments || 1));
 
 	const options = {

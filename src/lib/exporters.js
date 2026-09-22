@@ -30,11 +30,16 @@ export class ThreeMFExporter {
 		const objectsXml = meshes
 			.map((mesh, i) => ThreeMFExporter.buildObjectXML(mesh, i + 1))
 			.join('\n        ');
-		const assemblyId = meshes.length + 2;
 		const materials = '<basematerials id="1"><base name="Base" displaycolor="#8A93A6FF"/><base name="Inlay" displaycolor="#E8A33DFF"/></basematerials>';
-		const components = meshes.map((mesh, index) => `<component objectid="${index + 2}"/>`).join('');
-		const assembly = `<object id="${assemblyId}" type="model" name="Simple3D"><components>${components}</components></object>`;
-		const buildXml = `<item objectid="${assemblyId}"/>`;
+		// One aligned assembly (and build item) per printable body: base, then lid.
+		const bodies = [...new Set(meshes.map((mesh) => mesh.userData.body || 'base'))];
+		const assemblies = bodies.map((body, index) => {
+			const id = meshes.length + 2 + index;
+			const components = meshes.map((mesh, meshIndex) => ((mesh.userData.body || 'base') === body ? `<component objectid="${meshIndex + 2}"/>` : '')).join('');
+			return { id, xml: `<object id="${id}" type="model" name="${body === 'lid' ? 'Simple3D_Lid' : 'Simple3D'}"><components>${components}</components></object>` };
+		});
+		const assembly = assemblies.map((entry) => entry.xml).join('');
+		const buildXml = assemblies.map((entry) => `<item objectid="${entry.id}"/>`).join('');
 
 		const modelXml =
 			`<?xml version="1.0" encoding="UTF-8"?>\n` +

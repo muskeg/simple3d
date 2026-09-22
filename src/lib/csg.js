@@ -1,25 +1,14 @@
 import * as THREE from 'three';
-import ManifoldModule from 'manifold-3d';
-import { createBaseGeometry } from './baseShapes.js';
-import { createTextGeometry } from './geometry.js';
-import { getMaskGeometry } from './mask.js';
 import { quaternionFromRot } from './placement.js';
-import { objectFont } from './fonts.js';
+import { getEngine, toSolid, solidToGeometry } from './engine.js';
+import { createBaseSolid, createLidSolid, lidPrintMatrix } from './bodies.js';
+import { createObjectGeometry, effectiveMode, objectBody } from './objects.js';
+
+export { initGeometryEngine } from './engine.js';
 
 // Penetration offset so boolean unions/subtractions never share an exactly
 // coplanar face (avoids degenerate slivers / open edges).
 const PENETRATION = 0.05;
-let engine;
-let enginePromise;
-
-export function initGeometryEngine(wasmURL) {
-	enginePromise ??= ManifoldModule(wasmURL ? { locateFile: () => wasmURL } : undefined).then((module) => {
-		module.setup();
-		engine = module;
-		return module;
-	});
-	return enginePromise;
-}
 
 function makePreviewMaterial(color) {
 	return new THREE.MeshStandardMaterial({
@@ -30,33 +19,16 @@ function makePreviewMaterial(color) {
 	});
 }
 
-function toSolid(geometry, matrix = new THREE.Matrix4()) {
-	const transformed = geometry.clone().applyMatrix4(matrix);
-	try {
-		const positions = transformed.attributes.position;
-		const indices = transformed.index ? new Uint32Array(transformed.index.array) : Uint32Array.from({ length: positions.count }, (_, index) => index);
-		const mesh = new engine.Mesh({ numProp: 3, vertProperties: new Float32Array(positions.array), triVerts: indices });
-		mesh.merge();
-		return new engine.Manifold(mesh);
-	} finally {
-		transformed.dispose();
-	}
-}
-
-function resultMesh(solid, name, color) {
+function resultMesh(solid, name, color, body) {
 	if (solid.isEmpty()) return null;
-	const data = solid.getMesh();
-	const geometry = new THREE.BufferGeometry();
-	geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(data.vertProperties), 3));
-	geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(data.triVerts), 1));
-	geometry.computeVertexNormals();
-	const mesh = new THREE.Mesh(geometry, makePreviewMaterial(color));
+	const mesh = new THREE.Mesh(solidToGeometry(solid), makePreviewMaterial(color));
 	mesh.name = name;
+	mesh.userData.body = body;
 	return mesh;
 }
 
 /**
- * World placement for a model object (text / image).
+ * World placement for a model object.
  *
  * The unit geometry (height 1, bottom at y=-0.5, extrusion +Y) is scaled by
  * `height` and oriented by the object's quaternion. The anchor `pos` is the
@@ -64,20 +36,26 @@ function resultMesh(solid, name, color) {
  *   raised      : anchor at the BOTTOM of the object, body extends along +Y
  *   inset       : anchor stays at the surface; the slab sinks `inset` below
  *   flush_inlay : the slab sinks by the object's inlayDepth below the anchor
+ *   hole        : cutter geometry is already in mm and centered on the anchor
  */
-export function placeObject(geom, obj, settings, mode) {
+export function placeObject(geom, obj, settings, mode = effectiveMode(obj, settings)) {
 	const q = quaternionFromRot(obj.rot || { x: 0, y: 0, z: 0 });
+	const pos = obj.pos || { x: 0, y: 0, z: 0 };
+	const brush = new THREE.Mesh(geom, null);
+	brush.quaternion.copy(q);
+	if (mode === 'hole') {
+		brush.position.set(pos.x, pos.y, pos.z);
+		brush.updateMatrixWorld(true);
+		return brush;
+	}
 	const e = Math.max(0.05, obj.extrudeHeight ?? 4);
 	const up = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
 
-	const depth = Math.max(0.001, mode === 'flush_inlay' ? obj.inlayDepth ?? 2 : settings.insetDepth);
+	const depth = Math.max(0.001, mode === 'flush_inlay' ? obj.inlayDepth ?? 2 : obj.insetDepth ?? settings.insetDepth);
 	const slab = (mode === 'raised' ? e : depth) + PENETRATION;
 
-	const brush = new THREE.Mesh(geom, null);
 	brush.scale.set(1, Math.max(0.01, slab), 1);
-	brush.quaternion.copy(q);
 
-	const pos = obj.pos || { x: 0, y: 0, z: 0 };
 	if (mode === 'raised') {
 		// Bottom face sits on the anchor; body extends along +Y (slightly
 		// overlapping the surface for a watertight union).
@@ -90,54 +68,92 @@ export function placeObject(geom, obj, settings, mode) {
 }
 
 /**
- * Builds the full multi-part model as a THREE.Group containing:
- *   - "Base_Mesh"  : the base plate (with every object unioned/carved)
- *   - "Text_Inlay_i": (flush inlay mode) one inlay mesh per object, each
- *                     filling that object's carved cavity exactly.
- *
- * Modes (global, applied to all objects):
- *   raised       -> ADDITION(base, object on top)
- *   inset        -> SUBTRACTION(base, object sunk partly below the surface)
- *   flush_inlay  -> SUBTRACTION(base, object slab) + INTERSECTION inlay
+ * Applies a body's objects in a fixed order so combinations stay predictable:
+ *   1. inset / flush inlay cuts in object order (inlays partition the body)
+ *   2. raised additions (removed from any inlay they overlap)
+ *   3. holes, which cut through the body and its inlays
  */
-export function buildModel(settings, font) {
-	if (!engine) throw new Error('Geometry engine is not initialized.');
+function buildBody(body, bodySolid, settings, fonts, parent, track, release) {
+	let result = bodySolid;
+	const inlays = [];
+	const objects = (settings.objects || []).filter((object) => objectBody(object, settings) === body);
+	const cutterFor = (object, mode) => {
+		const geometry = createObjectGeometry(object, fonts, settings);
+		if (!geometry) return null;
+		try { return track(toSolid(geometry, placeObject(geometry, object, settings, mode).matrixWorld)); } finally { geometry.dispose(); }
+	};
+	const replace = (previous, next) => { release(previous); return track(next); };
+	for (const phase of [['inset', 'flush_inlay'], ['raised'], ['hole']]) {
+		for (const object of objects) {
+			const mode = effectiveMode(object, settings);
+			if (!phase.includes(mode)) continue;
+			const cutter = cutterFor(object, mode);
+			if (!cutter) continue;
+			if (mode === 'flush_inlay') inlays.push({ id: object.id, solid: track(result.intersect(cutter)) });
+			if (mode === 'raised') result = replace(result, result.add(cutter));
+			else result = replace(result, result.subtract(cutter));
+			if (mode === 'raised' || mode === 'hole') for (const inlay of inlays) inlay.solid = replace(inlay.solid, inlay.solid.subtract(cutter));
+			release(cutter);
+		}
+	}
+	for (const inlay of inlays) {
+		const mesh = resultMesh(inlay.solid, `Inlay_${inlay.id}`, 0xe8a33d, body);
+		if (mesh) parent.add(mesh);
+	}
+	const mesh = resultMesh(result, body === 'lid' ? 'Lid_Mesh' : 'Base_Mesh', 0x8a93a6, body);
+	if (mesh) parent.add(mesh);
+}
+
+/**
+ * Builds the full multi-part model as a THREE.Group containing:
+ *   - "Base_Mesh"   : the base body with its objects applied
+ *   - "Inlay_<id>"  : one inlay part per flush-inlay object
+ *   - "Lid" group   : Lid_Mesh + lid inlays, authored floating above the
+ *                     base; userData.printMatrix lays it out for printing
+ */
+export function buildModel(settings, fonts) {
+	getEngine();
 	const group = new THREE.Group();
 	group.name = 'Model';
 	const solids = new Set();
 	const track = (solid) => { solids.add(solid); return solid; };
-	const release = (solid) => { solid.delete(); solids.delete(solid); };
+	const release = (solid) => { if (solids.delete(solid)) solid.delete(); };
 	try {
-		const baseGeometry = createBaseGeometry(settings);
-		let result;
-		try { result = track(toSolid(baseGeometry)); } finally { baseGeometry.dispose(); }
-		for (const object of settings.objects || []) {
-			const geometry = object.type === 'image' ? getMaskGeometry(object)?.clone() : createTextGeometry(object.text, objectFont(font, object, settings), object);
-			if (!geometry) continue;
-			let cutter;
-			try {
-				const placement = placeObject(geometry, object, settings, settings.mode);
-				cutter = track(toSolid(geometry, placement.matrixWorld));
-			} finally { geometry.dispose(); }
-			if (settings.mode === 'flush_inlay') {
-				const inlay = track(result.intersect(cutter));
-				const mesh = resultMesh(inlay, `Inlay_${object.id}`, 0xe8a33d);
-				if (mesh) group.add(mesh);
-				release(inlay);
+		buildBody('base', track(createBaseSolid(settings)), settings, fonts, group, track, release);
+		const lidSolid = createLidSolid(settings);
+		if (lidSolid) {
+			const lid = new THREE.Group();
+			lid.name = 'Lid';
+			buildBody('lid', track(lidSolid), settings, fonts, lid, track, release);
+			if (lid.children.length && group.children.length) {
+				lid.userData.printMatrix = lidPrintMatrix(new THREE.Box3().setFromObject(group), new THREE.Box3().setFromObject(lid));
 			}
-			const previous = result;
-			result = track(settings.mode === 'raised' ? result.add(cutter) : result.subtract(cutter));
-			release(previous);
-			release(cutter);
+			group.add(lid);
 		}
-		const mesh = resultMesh(result, 'Base_Mesh', 0x8a93a6);
-		if (mesh) group.add(mesh);
 		return group;
 	} catch (error) {
 		disposeGroup(group);
 		throw new Error(`Unable to construct a closed solid: ${error.message || error}`);
 	} finally {
 		for (const solid of solids) solid.delete();
+	}
+}
+
+/** Temporarily applies the lid print layout while `fn` runs synchronously. */
+export function withPrintLayout(group, fn) {
+	const lid = group?.getObjectByName('Lid');
+	const matrix = lid?.userData.printMatrix;
+	if (!matrix) return fn();
+	const saved = { position: lid.position.clone(), quaternion: lid.quaternion.clone(), scale: lid.scale.clone() };
+	matrix.decompose(lid.position, lid.quaternion, lid.scale);
+	group.updateMatrixWorld(true);
+	try {
+		return fn();
+	} finally {
+		lid.position.copy(saved.position);
+		lid.quaternion.copy(saved.quaternion);
+		lid.scale.copy(saved.scale);
+		group.updateMatrixWorld(true);
 	}
 }
 

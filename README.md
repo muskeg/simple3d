@@ -29,12 +29,13 @@ directly is insufficient for the font and WebAssembly assets.
 
 ### Base Dimensions
 
-- Box, cylinder, sphere, cone and pyramid are supported.
+- Box, cylinder, sphere, cone, pyramid, N-gon prism (3-12 sides, flat front
+	edge), tube (with wall thickness) and torus are supported.
 - Width, Depth and Height are the **complete base bounding box in millimeters**,
 	including chamfers/fillets. A non-square cylinder or cone has an elliptical
 	footprint; a non-square pyramid has a rectangular footprint. A sphere can be
 	an ellipsoid. Tessellation is normalized to preserve the requested extents.
-- Box corners can be rounded. Box and cylinder edges can be chamfered or filleted.
+- Box corners can be rounded. Box, cylinder and N-gon edges can be chamfered or filleted.
 - Corner radius is limited to half the smaller footprint dimension. Chamfer is
 	limited to 45% of the smallest dimension, preserving a positive core. The
 	displayed controls reflect these limits.
@@ -46,12 +47,37 @@ directly is insufficient for the font and WebAssembly assets.
 	arithmetic, not exact rational arithmetic.
 - Surface/curve segment counts and mask resolution have hard complexity limits.
 
+### Shell And Lid
+
+Box, cylinder and N-gon bases can be hollowed with a uniform **Wall Thickness**
+(the floor uses the same thickness), with the top open or closed. The cavity is
+the base footprint offset inward, so walls are exact for boxes and N-gons and
+measured normal to the outline for ellipses. With the shell on, the chamfer is
+limited to half the wall.
+
+An open shell can get a **lid**: a plate matching the footprint plus a locating
+lip offset inward by wall + **Lid Clearance** (default 0.2 mm). In the editor the
+lid floats above the box; objects can target the lid with the object's **Body**
+select. The **Lay out for print** toolbar toggle previews the export layout: the
+lid flipped upside down beside the box on the same floor. Exports always use
+that layout, so raised details on the lid top face the bed. A non-blocking
+warning appears when an inset or inlay is as deep as the wall.
+
 ### Objects And Fonts
 
-Add as many text/image objects as the browser can reasonably handle. Select one
-in the list or by clicking its geometry. Duplicate and delete act on individual
-objects; deleting the last object leaves a valid base-only model. Empty text
-adds no geometry.
+Add text, image masks, SVG outlines, shapes (circle, rectangle, star, heart,
+polygon, arrow) and holes. Select one in the list or by clicking its geometry.
+Duplicate and delete act on individual objects; deleting the last object leaves
+a valid base-only model. Empty text adds no geometry.
+
+- Every object except holes has its own **Object Mode**: Default (follows the
+	global Operation Mode), Raised, Inset or Flush inlay, with its own depths.
+- **Mirror** flips an object's reading direction, for stamps.
+- **Holes** cut straight through their body along the object axis (plain,
+	countersunk at 90°, or counterbored) and also cut raised objects and inlays.
+- **SVG** files (up to 2 MB) use their filled paths; overlapping paths are
+	unioned. SVG Width sets the outline width. SVGs are parsed as XML only and
+	never inserted into the page.
 
 Each text object has its own font, size and extrusion height. The four bundled
 faces are Helvetiker, Helvetiker Bold, Optimer and Gentilis. Glyph coverage is
@@ -107,13 +133,17 @@ No upload is sent to a server. A mask is rasterized once per parameter change.
 
 ### Operations And Export
 
-The operation mode applies to all objects:
+The global operation mode applies to every object whose Object Mode is Default:
 
 | Mode | Result |
 | --- | --- |
 | Raised | Union of the base and outward extrusions. Outward height is exact; 0.05 mm of inward overlap makes the surface connection robust. |
-| Inset | Cut inward by Inset Depth, independently of the object's raised extrusion height. A sufficiently deep cut can pierce the base. |
+| Inset | Cut inward by Inset Depth (or the object's own depth), independently of the object's raised extrusion height. A sufficiently deep cut can pierce the base. |
 | Flush Inlay | A pocket cut inward from each object's surface anchor by its own Inlay Depth, plus a separate matching inlay part flush with the base surface. Earlier objects own overlapping inlay volume. |
+
+Each body is built in a fixed order: insets and inlay pockets (object order),
+then raised objects (which take their volume from any inlay they overlap), then
+holes. Raised text anchored on a pocket floor therefore survives the pocket.
 
 In **Flush Inlay** mode, select a text or image object and set **Inlay Depth** in
 its object controls (default 2 mm, minimum 0.1 mm). This is independent of raised
@@ -130,8 +160,9 @@ and hidden faces easier to inspect. Raised objects share the base mesh and its
 opacity. This affects only the viewport; exported geometry and material colors
 are unchanged.
 
-**3MF is recommended.** It contains a single aligned assembly, named base/inlay
-components, shared vertex indices, and core base-material colors. Slicers may
+**3MF is recommended.** It contains one aligned assembly per printable body
+(base, and lid when enabled), named base/inlay components, shared vertex
+indices, and core base-material colors. Slicers may
 require explicit material/extruder assignment. This is not a slicer-specific
 project file and does not contain printer settings.
 
@@ -141,6 +172,16 @@ The base is origin-centered; arrange the assembly on the build plate in the slic
 
 Export is disabled until the current settings are successfully built. Invalid
 geometry or a completely removed model cannot silently export a previous result.
+
+### Projects And Presets
+
+**Save project** downloads a `.json` file with the full design, including
+embedded images and SVGs; **Open project** restores it. Loaded files are treated
+as untrusted: values are type-checked, clamped or whitelisted, image data must
+be a PNG/JPEG/WebP/GIF data URL, and files are limited to 64 MB and 200 objects.
+The preset menu starts from a keychain tag, name plate, hex coaster, dice,
+stamp, box with lid or wall sign. Opening a project or preset asks before
+discarding unsaved changes.
 
 ## Tests
 
@@ -185,8 +226,8 @@ Manifold performs solid booleans; Three.js provides rendering, text extrusion an
 transform/orbit controls. Bundled fonts retain their upstream license in
 [public/fonts/LICENSE](public/fonts/LICENSE) and embedded typeface metadata.
 
-There is no server, autosave, undo history or project-file persistence. Reloading
-resets the editor. Large masks, high tessellation and many objects can block the
+There is no server, autosave or undo history. Reloading resets the editor
+unless you open a saved project. Large masks, high tessellation and many objects can block the
 main thread during rebuilding. WebGL and WebAssembly are required. Physical
 printing, printer tolerances and third-party slicer compatibility must still be
 checked for the intended printer and materials.
