@@ -333,6 +333,37 @@ test('rotation gizmo commits a quaternion and custom axes are editable', async (
 	await expect(page.getByRole('textbox', { name: 'Rotation Z', exact: true })).not.toHaveValue('0');
 });
 
+test('clicking empty space deselects and hides the gizmo, orbiting does not', async ({ page }) => {
+	await page.getByRole('button', { name: 'Rotate (E)', exact: true }).click();
+	const canvas = page.locator('canvas');
+	const redPixels = async () => {
+		const image = PNG.sync.read(await canvas.screenshot());
+		let count = 0;
+		for (let vertical = 0; vertical < image.height; vertical++) {
+			for (let horizontal = 0; horizontal < image.width; horizontal++) {
+				// Skip the axis view helper in the bottom-right corner, which is always drawn.
+				if (horizontal > image.width - 140 && vertical > image.height - 140) continue;
+				const offset = (vertical * image.width + horizontal) * 4;
+				if (image.data[offset] > 180 && image.data[offset + 1] < 85 && image.data[offset + 2] < 85) count++;
+			}
+		}
+		return count;
+	};
+	expect(await redPixels()).toBeGreaterThan(20);
+	const bounds = await canvas.boundingBox();
+	const empty = { x: bounds.x + 40, y: bounds.y + bounds.height - 40 };
+	await page.mouse.move(empty.x, empty.y);
+	await page.mouse.down();
+	await page.mouse.move(empty.x + 60, empty.y - 30, { steps: 8 });
+	await page.mouse.up();
+	await expect(page.getByRole('button', { name: 'Select ABC', exact: true })).toHaveAttribute('aria-pressed', 'true');
+	await page.mouse.click(empty.x, empty.y);
+	await expect(page.getByText('Select an object to edit it.', { exact: true })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Select ABC', exact: true })).toHaveAttribute('aria-pressed', 'false');
+	await expect.poll(redPixels).toBeLessThan(5);
+	await ready(page);
+});
+
 test('invalid image reports an error and a valid replacement recovers', async ({ page }) => {
 	await page.locator('#mask-file-input').setInputFiles({ name: 'bad.png', mimeType: 'image/png', buffer: Buffer.from('not an image') });
 	await expect(page.getByRole('alert')).toContainText('Unable to decode');

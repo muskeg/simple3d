@@ -144,6 +144,7 @@ export default function Viewport({ model, onModelRef, settings, fonts, selection
 		scene.add(secondaryOutlines);
 		const raycaster = new THREE.Raycaster();
 		let directDrag = null;
+		let emptyPress = null;
 		let gizmoDragging = false;
 		const canvas = renderer.domElement;
 		const cast = (event) => {
@@ -182,7 +183,10 @@ export default function Viewport({ model, onModelRef, settings, fonts, selection
 			if (event.button !== 0 || transform.axis || viewHelper.animating) return;
 			cast(event);
 			const hit = raycaster.intersectObjects(proxies.children, true)[0];
-			if (!hit) return;
+			if (!hit) {
+				emptyPress = { pointer: event.pointerId, x: event.clientX, y: event.clientY, additive: event.shiftKey || event.ctrlKey || event.metaKey };
+				return;
+			}
 			const root = hit.object.parent;
 			if (event.shiftKey || event.ctrlKey || event.metaKey) {
 				latest.current.onSelect(root.userData.id, true);
@@ -223,6 +227,11 @@ export default function Viewport({ model, onModelRef, settings, fonts, selection
 			root.updateMatrixWorld(true);
 		};
 		const pointerUp = (event) => {
+			if (emptyPress?.pointer === event.pointerId) {
+				// A click on empty space (not an orbit drag) clears the selection.
+				if (event.type === 'pointerup' && !emptyPress.additive && Math.hypot(event.clientX - emptyPress.x, event.clientY - emptyPress.y) < 5) latest.current.onSelect(null);
+				emptyPress = null;
+			}
 			if (!directDrag) return;
 			if (event.type === 'pointercancel') {
 				directDrag.root.position.copy(directDrag.position);

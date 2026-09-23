@@ -1,6 +1,9 @@
 # Implementation Review And Verification
 
-Review date: 2026-09-20.
+Review date: 2026-09-20. Updated 2026-09-22 for the feature expansion, UI
+reorganization, history/autosave, background builds and arrays (see
+[Feature Expansion](#feature-expansion-2026-09-22)). The requirement audit and
+defect list directly below describe the original 2026-09-20 delivery.
 
 ## Requirement Audit
 
@@ -54,40 +57,57 @@ prior session, rather than inferred from the unfinished implementation.
 
 ## Architecture And Ownership
 
-- `src/App.jsx` owns editor settings, selection, font/engine initialization and
-  debounced rebuilds. Export requires the successfully built settings to be the
-  current settings object. There is no persisted project state.
-- `src/lib/baseShapes.js` creates centered bases and enforces final extents.
-  `src/lib/geometry.js` creates the rounded-box outline and unit-prism text.
-- `src/lib/placement.js` owns face frames, raycast presets and quaternion math.
-- `src/lib/mask.js` decodes images and traces alpha/luminance contours. Cached
-  geometry is borrowed; consumers clone before mutating or disposing it.
-- `src/lib/csg.js` initializes Manifold once, converts input meshes into solids,
-  performs booleans, and returns a Three.js group. Temporary WASM solids are
-  explicitly deleted, including error paths.
+- `src/App.jsx` owns settings, the multi-selection (the last id is the primary
+  object), undo/redo history, autosave, keyboard shortcuts and rebuild
+  scheduling. Export requires the successfully built settings to be the current
+  settings object.
+- `src/components/ScenePanel.jsx` (Base/Objects tabs, File menu, export),
+  `Inspector.jsx` (selected-object editing, align, arrays, transform) and
+  `ui.jsx` (collapsible sections with remembered state, menus, segmented
+  controls) form the UI. `NumberField.jsx` provides typed entry and label
+  scrubbing. On narrow screens the Inspector is rendered as an Edit tab.
+- `src/lib/engine.js` initializes Manifold and converts between Three.js
+  geometry and Manifold solids. `bodies.js` builds the base (optionally hollow)
+  and lid bodies with 2D offsets. `baseShapes.js` creates centered bases with
+  exact extents.
+- `src/lib/objects.js` dispatches object geometry (text, image mask, SVG, shape,
+  hole) and mirroring. `geometry.js` lays out multi-line text by unioning glyph
+  outlines in 2D; `fonts.js` resolves bundled and uploaded TTF/OTF fonts;
+  `mask.js`, `svg.js` and `shapes2d.js` produce the other unit prisms.
+- `src/lib/csg.js` applies each body's objects (cuts and inlays, then raised,
+  then holes, with arrays expanded by `arrays.js`) and serializes the result
+  for worker transfer. Temporary WASM solids are deleted, including on error.
+- `src/lib/build.worker.js` runs `buildModel` in a module Web Worker;
+  `buildClient.js` queues the latest request only and falls back to the page
+  if the worker cannot start. SVGs are parsed on the page because workers have
+  no DOMParser.
+- `src/lib/placement.js` owns face frames, raycast presets and quaternion math;
+  `align.js` owns alignment, distribution, centering, nudging and grid snapping.
+- `src/lib/project.js` serializes projects and sanitizes untrusted project and
+  autosave data; `presets.js` materializes starting designs.
 - Objects are authored as unit-height prisms on local XZ, with local +Y as their
   extrusion axis. `pos` is a contact anchor; `rot` is Euler XYZ in degrees.
   World rotations are composed with quaternions before conversion back to state.
-- The viewport owns the renderer, camera, controls, raycast proxies and displayed
-  model lifetime. Proxies never enter exports. Gestures show a temporary overlay
-  and commit settings on release, avoiding a boolean rebuild per pointer event.
-- `src/lib/exporters.js` writes a standard 3MF ZIP or binary STL. Export applies
-  world transforms and a right-handed Y-up to Z-up rotation without resizing.
+- The viewport owns the renderer, camera, controls, raycast proxies (including
+  array copies) and displayed model lifetime. Proxies never enter exports.
+  Gestures show a temporary overlay and commit settings on release.
+- `src/lib/exporters.js` writes a 3MF ZIP (one assembly and build item per
+  body) or binary STL, applying world transforms, the lid print layout and a
+  right-handed Y-up to Z-up rotation without resizing.
 
 ## Verification Performed
 
 All checks below passed locally in Linux/WSL using Node.js 20 and Playwright
-Chromium. CI is configured for Node.js 22.
+Chromium on 2026-09-22. CI is configured for Node.js 22.
 
 | Check | Result |
 | --- | --- |
-| `npm test` | 37 tests passed |
-| `npm run test:e2e` | 8 browser tests passed |
-| `npm run build` | Production JS, CSS, local fonts and WASM packaged successfully |
-| `npm run test:production` | All 8 browser tests passed against the static build |
+| `npm test` | 96 tests passed |
+| `npm run test:e2e` | 24 browser tests passed |
+| `npm run build` | Production JS, CSS, worker, local fonts and WASM packaged successfully |
+| `npm run test:production` | All 24 browser tests passed against the static build |
 | Desktop / mobile screenshots | 1440x900 and 390x844; rendered-model pixel coverage and orbit-induced pixel changes asserted |
 | Editor diagnostics | No errors reported |
-| Dependency audit during installation | No known vulnerabilities reported |
 
 Browser acceptance coverage includes actual pointer movement, raycast selection,
 surface drag, rotation-ring dragging, keyboard mode changes, independent fonts,
@@ -98,9 +118,11 @@ also tested independently. Closed-topology assertions require two incident
 triangles per indexed output edge; volume tests cover identical and partially
 overlapping inlays.
 
-Vite reports a large main JS chunk and a browser-externalized `node:module`
-reference inside the upstream Manifold wrapper. The browser-only WASM path was
-verified by the static-production suite; these messages are not runtime failures.
+Vite reports a large main JS chunk (about 1.3 MB, 365 kB gzipped; the worker
+chunk is a further 426 kB) and a browser-externalized `node:module` reference
+inside the upstream Manifold wrapper. The browser-only WASM path was verified
+by the static-production suite in both the page and the worker; these messages
+are not runtime failures.
 
 ## Validation Boundaries
 
@@ -114,13 +136,24 @@ verified by the static-production suite; these messages are not runtime failures
 - Numerical tests cover representative dimensions and shapes, not every possible
   intersection or pathological raster. Geometry is floating-point. Manifold
   rejects invalid input instead of silently exporting a malformed result.
-- Surface snapping aligns rigid geometry; it is not curved-text wrapping. Free
-  placement can intentionally yield disconnected bodies. Inspect connectivity
-  and appropriate manufacturing tolerances in the slicer.
-- Complex masks and large object collections are synchronous main-thread work.
-  Resolution/tessellation limits bound individual inputs, not total scene cost.
-- Undo/redo, project save/load and curved text are not delivered features and
-  were not part of the recovered requirements.
+- Surface snapping aligns rigid geometry; it is not curved-text wrapping. Array
+  copies, alignment and grid snapping also work in flat planes and can lift off
+  curved bases. Free placement can intentionally yield disconnected bodies.
+  Inspect connectivity and appropriate manufacturing tolerances in the slicer.
+- Builds run in a module worker. Image masks in the worker need
+  `createImageBitmap` and `OffscreenCanvas`; browsers lacking them in workers
+  (older Safari) will report a build error for image objects rather than
+  falling back. Only Chromium was tested.
+- Hollow shells are uniform for boxes and N-gons; elliptical footprints are
+  offset along the outline normal. Lid clearance, lip fit and wall strength
+  have not been validated by printing.
+- Autosave uses `localStorage`; designs with large embedded images or fonts may
+  exceed the quota, in which case autosave pauses with a notice. Undo history
+  is in memory only and does not survive a reload.
+- Uploaded fonts are parsed by Three.js's bundled opentype.js. Kerning is not
+  applied, and glyph coverage depends on the font.
+- Curved text, heightmap relief, print checks and additional export formats are
+  not delivered features.
 
 ## Deployment Gate
 
@@ -170,3 +203,51 @@ during alignment, and helper GPU resources are disposed with the viewport.
 Six browser cases verify alignment in each signed direction, unchanged object
 state/exports and recovery of free orbit; the bottom-view case also uses a mobile
 viewport. Negative endpoints are labelled and colored for the dark background.
+
+## Feature Expansion (2026-09-22)
+
+Three batches were requested in conversation after the original delivery, each
+planned with the user before implementation. Commits: `cbc0989` (objects,
+bases, shell/lid, projects), `2338bb1` (UI, alignment, text), `354c438`
+(history, autosave, worker, arrays), plus the empty-space deselection change.
+
+| Request | Delivered | Evidence |
+| --- | --- | --- |
+| Per-object mode, mirror | Default/raised/inset/flush per object with own depths; mirrored geometry with corrected winding | Mixed-mode volumes; mirrored solids stay closed with positive volume |
+| Holes, shapes, SVG | Through holes (plain/countersink/counterbore) that also cut inlays and raised parts; six 2D shapes with exact footprints; SVG fills unioned in 2D | Exact hole volumes; footprint tests per shape and mode; SVG upload including an embedded `<script>` that must not run |
+| More bases | N-gon prism, tube, torus; face presets land on the ring of hollow-centered bases | Exact-bounds and all shape/mode tests; ring-placement tests |
+| Hollow shell and lid | Offset cavity (open/closed); plate + lip with clearance; separate 3MF build item; print layout preview/export | Exact cavity and lid volumes; lip width measured; 3MF has two build items; STL spans the laid-out pair |
+| Save/load, presets | Validated JSON projects (images, SVGs, fonts embedded); seven presets | Round-trip and hostile-input tests; every preset builds a closed model; save/open/new browser flow |
+| UI reorganization | Base/Objects tabs, Inspector (Edit tab on mobile), File menu, export split button, collapsible remembered sections, label scrubbing | Full browser suite rewritten against the new layout at desktop and mobile widths |
+| Align tools | Multi-select, group move, align min/center/max, distribute, center on face/body, grid and angle snap, keyboard nudge/delete/duplicate/escape | Bounding-box math tests; browser flow for select, align, distribute, nudge and shortcuts |
+| Text controls | Multi-line, alignment, letter/line spacing, TTF/OTF upload | Exact spacing and alignment tests with a generated OTF; upload, invalid font and project persistence in the browser |
+| Undo/redo, autosave | 100-step history with per-field coalescing; validated autosave restore | Browser test covers field steps, one-step scrubbing, keyboard undo/redo and reload restore |
+| Background builds | Module worker with latest-only queue and page fallback | Browser test asserts the worker path is active in dev and production |
+| Arrays | Linear, grid and circular (sweep, rotate copies); per-copy inlay parts; convert to objects | Placement and cap tests; arrayed inlays and holes volume test; browser export and conversion |
+| Deselect on empty click | A click on empty viewport space (not an orbit drag) clears the selection and hides the gizmo | Browser pixel test: gizmo pixels disappear after a click but not after an orbit |
+
+### Defects Found During The Expansion
+
+- A file conflict dropped the `NonZero` fill rule from the shell/lid outline
+  sections. It was restored and verified with the full suites.
+- The original text path (Three.js `TextGeometry`) extruded each glyph contour
+  separately, so overlapping letters (tight spacing, some fonts) would produce
+  self-intersecting input. Glyph outlines are now unioned in 2D first.
+- SVG parsing relies on `DOMParser`, which workers do not provide. SVG polygons
+  are parsed on the page and sent to the worker.
+- History coalescing initially merged edits to different fields, and slow
+  scrubs were split into several steps. Steps now split when the set of changed
+  fields changes, and commits wait for pointer gestures to end.
+- Icon-only segmented buttons without icons rendered empty (the align-axis
+  control). They now fall back to their text labels.
+- Clicking empty viewport space kept the selection, so the gizmo could not be
+  hidden without the Escape key. Empty clicks now deselect.
+
+### Verification
+
+On 2026-09-22: 96 numerical tests, 24 development browser tests, a production
+build and 24 production browser tests passed. New numerical suites are
+`features.test.js`, `ux.test.js` and `arrays.test.js`; `tests/fixtures/font.js`
+generates an OTF at test time instead of committing a binary font. No push,
+remote deployment, slicer import or physical print was performed for these
+changes.

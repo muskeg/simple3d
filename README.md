@@ -127,6 +127,7 @@ exact text bounding-box width.
 	shortcuts do not intercept typing in inputs. Toolbar buttons expose the same
 	actions on touch screens.
 - Drag empty viewport space to orbit; use the wheel/pinch gesture to zoom.
+	Click empty space without dragging to deselect, hiding the gizmo and outlines.
 	Orbiting below the model is supported.
 - Click an endpoint on the bottom-right axis gizmo to align the view from +X,
 	-X, +Y, -Y, +Z or -Z. The transition preserves the current orbit target and

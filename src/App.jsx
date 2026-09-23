@@ -328,6 +328,7 @@ export default function App() {
 	}, []);
 
 	const selectObject = useCallback((id, additive = false) => {
+		if (id == null) return setSelection([]);
 		if (!additive) return setSelection([id]);
 		setSelection((current) => (current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id]));
 	}, []);
