@@ -27,6 +27,19 @@ directly is insufficient for the font and WebAssembly assets.
 
 ## Editing
 
+The left panel has **Base** (shape, dimensions, shell and lid) and **Objects**
+(default mode, add buttons and the object list) tabs; the **File** menu holds
+New, Open, Save and the presets. The right-hand **Inspector** edits the selected
+object. On narrow screens the Inspector becomes an **Edit** tab that opens when
+you select an object. Sections collapse and remember their state; rarely used
+settings live under **Advanced**, and numeric position/rotation under
+**Transform**.
+
+Keyboard: `Delete`/`Backspace` deletes the selection, `Ctrl/Cmd+D` duplicates
+it, arrow keys nudge it along the primary object's reading axes (1 mm; `Shift`
+10 mm; `Alt` 0.1 mm) and `Escape` clears the selection. Shortcuts are ignored
+while typing in a field.
+
 ### Base Dimensions
 
 - Box, cylinder, sphere, cone, pyramid, N-gon prism (3-12 sides, flat front
@@ -39,8 +52,9 @@ directly is insufficient for the font and WebAssembly assets.
 - Corner radius is limited to half the smaller footprint dimension. Chamfer is
 	limited to 45% of the smallest dimension, preserving a positive core. The
 	displayed controls reflect these limits.
-- Sliders provide convenient ranges, not hard dimensional limits. Type a value
-	and press Enter or leave the field to apply it. Escape cancels an edit.
+- Drag a field's label left/right to scrub its value (`Shift` x10, `Alt` x0.1),
+	or type a value and press Enter or leave the field to apply it. Arrow Up/Down
+	in a field steps it. Escape cancels an edit.
 - Base dimensions start at 0.1 mm. Typed dimensions are capped at 1,000,000 mm;
 	positions and angles allow negative values. Inputs retain up to three decimal
 	places and reject malformed or non-finite values. Geometry uses floating-point
@@ -80,10 +94,18 @@ a valid base-only model. Empty text adds no geometry.
 	never inserted into the page.
 
 Each text object has its own font, size and extrusion height. The four bundled
-faces are Helvetiker, Helvetiker Bold, Optimer and Gentilis. Glyph coverage is
-limited to the bundled typeface data; Three.js substitutes its fallback glyph
-for unsupported characters. Font size is a typeface size, not the exact text
-bounding-box width.
+faces are Helvetiker, Helvetiker Bold, Optimer and Gentilis. Text may span
+several lines (Enter in the text box) aligned left, center or right, with
+**Letter Spacing** in millimeters (negative values tighten) and **Line Spacing**
+as a multiple of the typeface line height. Glyph outlines are merged before
+extrusion, so overlapping letters still form one valid solid. Kerning is not
+applied.
+
+**Upload font** (next to the font menu) adds a TTF or OTF file (up to 10 MB,
+8 per project) to the project; it is embedded in saved project files. Glyph
+coverage is limited to the font; missing characters fall back to `?` when the
+font has it and are otherwise skipped. Font size is a typeface size, not the
+exact text bounding-box width.
 
 ### Placement And Rotation
 
@@ -109,6 +131,18 @@ bounding-box width.
 - The six face buttons raycast the actual mesh, including sloped pyramid/cone
 	surfaces. Named-face attachments follow base resizing. Manual positioning,
 	free rotation and drag placement use world coordinates instead.
+- **Center on face** moves an object within its surface plane to the center of
+	the face its normal points to (across, up, or both). **Center on body** sets
+	one world coordinate to the body's center.
+- **Grid snap** (viewport toolbar) rounds drag positions to the Grid Step and
+	gizmo rotations to the Angle Step, both set under Transform.
+- **Multi-select** with `Shift`/`Ctrl`/`Cmd`+click in the list or viewport. The
+	last object clicked is the primary one shown in the Inspector and carrying
+	the gizmo. Moving it moves the whole selection; rotation applies to the
+	primary object only. With several objects selected, align their bounding
+	boxes to the selection's min, center or max on world X, Y or Z, distribute
+	three or more with equal gaps (the outermost objects stay put), or duplicate
+	and delete them together.
 
 Objects remain rigid planar extrusions: snapping to an ellipsoid or cone does
 not bend text around it. A large object on a curved surface may make only partial
@@ -166,7 +200,8 @@ indices, and core base-material colors. Slicers may
 require explicit material/extruder assignment. This is not a slicer-specific
 project file and does not contain printer settings.
 
-STL is a binary fallback without part colors. Both formats use millimeters and
+STL is a binary fallback without part colors (in the menu beside the 3MF
+button). Both formats use millimeters and
 convert the editor's Y-up coordinates to conventional Z-up print coordinates.
 The base is origin-centered; arrange the assembly on the build plate in the slicer.
 
@@ -176,10 +211,10 @@ geometry or a completely removed model cannot silently export a previous result.
 ### Projects And Presets
 
 **Save project** downloads a `.json` file with the full design, including
-embedded images and SVGs; **Open project** restores it. Loaded files are treated
+embedded images, SVGs and uploaded fonts; **Open project** restores it. Loaded files are treated
 as untrusted: values are type-checked, clamped or whitelisted, image data must
 be a PNG/JPEG/WebP/GIF data URL, and files are limited to 64 MB and 200 objects.
-The preset menu starts from a keychain tag, name plate, hex coaster, dice,
+The File menu's presets start from a keychain tag, name plate, hex coaster, dice,
 stamp, box with lid or wall sign. Opening a project or preset asks before
 discarding unsaved changes.
 
@@ -222,8 +257,9 @@ workflow are separate from a successful local production test.
 ## Stack And Limits
 
 React 19, Vite 6, Tailwind CSS 4, Three.js, Manifold WASM, d3-contour and JSZip.
-Manifold performs solid booleans; Three.js provides rendering, text extrusion and
-transform/orbit controls. Bundled fonts retain their upstream license in
+Manifold performs solid booleans, 2D outline unions and extrusion; Three.js
+provides rendering, glyph outlines, TTF/OTF parsing (via its bundled opentype.js)
+and transform/orbit controls. Bundled fonts retain their upstream license in
 [public/fonts/LICENSE](public/fonts/LICENSE) and embedded typeface metadata.
 
 There is no server, autosave or undo history. Reloading resets the editor

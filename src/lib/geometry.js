@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
+import { getEngine, solidToGeometry, withTracking, Z_TO_Y_ARRAY } from './engine.js';
 
 /** Counter-clockwise rounded rectangle centered on the origin. */
 export function roundedRectShape(w, d, r) {
@@ -75,37 +75,62 @@ export function createBaseGeometry({ width, depth, height, cornerRadius, chamfer
  * Builds a text geometry as a UNIT PRISM: flat side on local XZ, extrusion
  * toward local +Y, centered on the origin, height exactly 1.
  *
+ * Lines split on "\n" and are aligned left/center/right within the widest
+ * line. letterSpacing (mm) is added after each glyph advance; lineHeight
+ * scales the typeface line advance. Glyph outlines are unioned in 2D, so
+ * tight spacing or self-overlapping glyphs still produce one valid solid.
+ *
  * The object's world height (extrudeHeight) is applied by the CSG pipeline
  * as a Y-scale on the brush, so the extrusion axis (and therefore the
  * inset/flush depth through the base) always follows the object's
  * orientation.
  */
-export function createTextGeometry(text, font, { fontSize, curveSegments }) {
-	const clean = (text ?? '').trim();
-	if (!clean) return null;
-	let geom;
+export function createTextGeometry(text, font, { fontSize, curveSegments, align = 'center', letterSpacing = 0, lineHeight = 1 }) {
+	const lines = String(text ?? '').replace(/\r/g, '').split('\n').map((line) => line.replace(/\s+$/, ''));
+	while (lines.length && !lines[0].trim()) lines.shift();
+	while (lines.length && !lines.at(-1).trim()) lines.pop();
+	if (!lines.length || !font?.data) return null;
+	const data = font.data;
+	const size = Math.max(0.5, fontSize);
+	const scale = size / data.resolution;
+	const advance = (data.boundingBox.yMax - data.boundingBox.yMin + data.underlineThickness) * scale * Math.max(0.1, lineHeight ?? 1);
+	const spacing = Number.isFinite(letterSpacing) ? letterSpacing : 0;
+	const segments = Math.max(2, Math.round(curveSegments || 8));
+	const rows = lines.map((line, row) => {
+		const glyphs = [];
+		let x = 0;
+		for (const char of line) {
+			const key = data.glyphs[char] ? char : '?';
+			const glyph = data.glyphs[key];
+			if (!glyph) continue;
+			glyphs.push({ key, x });
+			x += glyph.ha * scale + spacing;
+		}
+		return { glyphs, width: Math.max(0, x - spacing), y: -row * advance };
+	});
+	const widest = Math.max(...rows.map((row) => row.width));
+	const { CrossSection } = getEngine();
 	try {
-		geom = new TextGeometry(clean, {
-			font,
-			size: Math.max(0.5, fontSize),
-			depth: 1,
-			curveSegments: Math.max(2, Math.round(curveSegments || 8)),
-			bevelEnabled: false,
+		return withTracking((track) => {
+			const sections = [];
+			for (const row of rows) {
+				const shift = align === 'left' ? 0 : align === 'right' ? widest - row.width : (widest - row.width) / 2;
+				for (const { key, x } of row.glyphs) {
+					for (const shape of font.generateShapes(key, size)) {
+						const { shape: outer, holes } = shape.extractPoints(segments);
+						const rings = [outer, ...holes].filter((ring) => ring.length >= 3).map((ring) => ring.map((point) => [point.x + x + shift, point.y + row.y]));
+						if (rings.length) sections.push(track(new CrossSection(rings, 'EvenOdd')));
+					}
+				}
+			}
+			if (!sections.length) return null;
+			const merged = track(CrossSection.union(sections));
+			if (merged.isEmpty()) return null;
+			const geometry = solidToGeometry(track(track(merged.extrude(1)).transform(Z_TO_Y_ARRAY)));
+			geometry.center();
+			return geometry;
 		});
 	} catch (err) {
 		throw new Error(`Unable to build text: ${err.message}`);
 	}
-
-	// Guard against empty geometry (missing glyphs).
-	if (!geom.attributes.position || geom.attributes.position.count === 0) {
-		geom.dispose();
-		return null;
-	}
-
-	// TextGeometry is authored in the XY plane extruded toward +Z.
-	// Rotate to the canonical orientation: +Z (extrusion) -> +Y (up).
-	geom.rotateX(-Math.PI / 2);
-	geom.center();
-	geom.computeVertexNormals();
-	return geom;
 }

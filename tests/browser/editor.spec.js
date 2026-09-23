@@ -2,10 +2,25 @@ import { test, expect } from '@playwright/test';
 import { PNG } from 'pngjs';
 import { readFile } from 'node:fs/promises';
 import JSZip from 'jszip';
+import { makeTestFont } from '../fixtures/font.js';
 
 async function ready(page) {
-	await expect(page.getByRole('button', { name: 'Download .STL', exact: true })).toBeEnabled();
+	await expect(page.getByRole('button', { name: 'Download .3MF', exact: true })).toBeEnabled();
 	await expect(page.getByRole('alert')).toHaveCount(0);
+}
+
+async function tab(page, name) {
+	await page.getByRole('tab', { name, exact: true }).click();
+}
+
+async function expand(page, name) {
+	const toggle = page.getByRole('button', { name, exact: true });
+	if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+}
+
+async function fileMenu(page, item) {
+	await page.getByRole('button', { name: 'File', exact: true }).click();
+	await page.getByRole('menuitem', { name: item, exact: true }).click();
 }
 
 async function number(page, name, value) {
@@ -56,6 +71,7 @@ test('numeric edits, cancellation, exact exported dimensions and empty base', as
 	await page.getByRole('button', { name: 'Delete ABC', exact: true }).click();
 	await ready(page);
 	await expect(page.getByTestId('object-row')).toHaveCount(0);
+	await tab(page, 'Base');
 	await number(page, 'Width', 1200.125);
 	await number(page, 'Height', 18.25);
 	const field = page.getByRole('textbox', { name: 'Width', exact: true });
@@ -89,6 +105,7 @@ test('independent fonts, object lifecycle, rotations, modes and exports', async 
 	await expect(page.getByRole('combobox', { name: 'Font', exact: true })).toHaveValue('gentilis');
 	await page.getByRole('button', { name: 'Duplicate ABC', exact: true }).click();
 	await expect(page.getByTestId('object-row')).toHaveCount(3);
+	await expand(page, 'Transform');
 	await page.getByRole('combobox', { name: 'Rotation axis', exact: true }).selectOption('x');
 	await page.getByRole('spinbutton', { name: 'Rotation angle', exact: true }).fill('45');
 	await page.getByRole('button', { name: 'Apply', exact: true }).click();
@@ -229,6 +246,7 @@ test('pointer drag, selection and keyboard transform modes', async ({ page }) =>
 		return { x: rect.x + (dot(delta, right) / (depth * tangent * aspect) + 1) * rect.width / 2, y: rect.y + (1 - dot(delta, up) / (depth * tangent)) * rect.height / 2 };
 	});
 	await page.getByRole('button', { name: 'Snap to surface', exact: true }).click();
+	await expand(page, 'Transform');
 	const before = await page.getByRole('textbox', { name: 'Position X', exact: true }).inputValue();
 	await page.mouse.move(point.x, point.y); await page.mouse.down();
 	await page.mouse.move(point.x + 75, point.y + 20, { steps: 15 }); await page.mouse.up();
@@ -270,6 +288,8 @@ for (const direction of ['+X', '-X', '+Y', '-Y', '+Z', '-Z']) {
 		await page.mouse.click(bounds.x + 64 + 32 * right[axis] * sign, bounds.y + 64 - 32 * up[axis] * sign);
 		await expect(helper).toHaveAttribute('aria-description', `View from ${direction}`);
 		await expect(helper).toHaveAttribute('aria-busy', 'false');
+		if (direction === '-Y') await tab(page, 'Edit');
+		await expand(page, 'Transform');
 		await expect(page.getByRole('textbox', { name: 'Position X', exact: true })).toHaveValue('0');
 		await expect(page.getByRole('textbox', { name: 'Position Y', exact: true })).toHaveValue('6');
 		await expect(page.getByRole('textbox', { name: 'Rotation X', exact: true })).toHaveValue('0');
@@ -285,6 +305,7 @@ for (const direction of ['+X', '-X', '+Y', '-Y', '+Z', '-Z']) {
 }
 
 test('rotation gizmo commits a quaternion and custom axes are editable', async ({ page }) => {
+	await expand(page, 'Transform');
 	await page.getByRole('button', { name: 'Rotate (E)', exact: true }).click();
 	const canvas = page.locator('canvas');
 	const image = PNG.sync.read(await canvas.screenshot());
@@ -351,7 +372,7 @@ test('shapes, holes, SVG outlines, per-object modes and mirroring', async ({ pag
 	const base = await stl(page);
 	await page.getByRole('button', { name: 'Add Shape', exact: true }).click();
 	await ready(page);
-	await page.getByRole('combobox', { name: 'Shape Kind', exact: true }).selectOption('heart');
+	await page.getByRole('button', { name: 'Heart', exact: true }).click();
 	await ready(page);
 	const heart = await stl(page);
 	expect(heart.triangles).toBeGreaterThan(base.triangles);
@@ -365,6 +386,7 @@ test('shapes, holes, SVG outlines, per-object modes and mirroring', async ({ pag
 
 	await page.getByRole('button', { name: 'Add Hole', exact: true }).click();
 	await number(page, 'Hole Diameter', 8);
+	await expand(page, 'Transform');
 	await number(page, 'Position X', 35);
 	const plain = await stl(page);
 	await page.getByRole('combobox', { name: 'Hole Head', exact: true }).selectOption('countersink');
@@ -385,6 +407,7 @@ test('shapes, holes, SVG outlines, per-object modes and mirroring', async ({ pag
 });
 
 test('hollow shell with lid exports a separate lid laid out for printing', async ({ page }) => {
+	await tab(page, 'Base');
 	await number(page, 'Height', 30);
 	await page.getByRole('checkbox', { name: 'Hollow shell', exact: true }).check();
 	await ready(page);
@@ -417,27 +440,138 @@ test('hollow shell with lid exports a separate lid laid out for printing', async
 
 test('presets and project save/load round-trip', async ({ page }) => {
 	page.on('dialog', (dialog) => dialog.accept());
-	await page.getByRole('combobox', { name: 'Preset', exact: true }).selectOption('box');
+	await fileMenu(page, 'Box with lid');
 	await ready(page);
 	await expect(page.getByTestId('object-row')).toHaveCount(2);
+	await tab(page, 'Base');
 	await expect(page.getByRole('textbox', { name: 'Lid Thickness', exact: true })).toHaveValue('2.4');
 	await number(page, 'Width', 90);
 	const pending = page.waitForEvent('download');
-	await page.getByRole('button', { name: 'Save project', exact: true }).click();
+	await fileMenu(page, 'Save project');
 	const saved = await readFile(await (await pending).path());
 	expect(JSON.parse(saved.toString()).app).toBe('simple3d');
 
-	await page.getByRole('combobox', { name: 'Preset', exact: true }).selectOption('dice');
+	await fileMenu(page, 'Dice');
 	await ready(page);
+	await tab(page, 'Objects');
 	await expect(page.getByTestId('object-row')).toHaveCount(6);
 	expect((await modelXml(page)).match(/name="Inlay_/g)).toHaveLength(6);
 
 	await page.locator('#project-file-input').setInputFiles({ name: 'project.json', mimeType: 'application/json', buffer: saved });
 	await ready(page);
 	await expect(page.getByTestId('object-row')).toHaveCount(2);
+	await tab(page, 'Base');
 	await expect(page.getByRole('textbox', { name: 'Width', exact: true })).toHaveValue('90');
 	await expect(page.getByRole('checkbox', { name: 'Add lid', exact: true })).toBeChecked();
 	await page.locator('#project-file-input').setInputFiles({ name: 'broken.json', mimeType: 'application/json', buffer: Buffer.from('nope') });
 	await expect(page.getByRole('alert')).toContainText('not valid JSON');
+	await tab(page, 'Objects');
 	await expect(page.getByTestId('object-row')).toHaveCount(2);
+	await fileMenu(page, 'New project');
+	await expect(page.getByTestId('object-row')).toHaveCount(1);
+});
+
+test('multi-line text, alignment, spacing and uploaded fonts', async ({ page }) => {
+	// A 1 mm base makes the exported bounds measure the raised text itself.
+	await tab(page, 'Base');
+	await number(page, 'Width', 1);
+	await number(page, 'Depth', 1);
+	const text = page.getByRole('textbox', { name: 'Text', exact: true });
+	await text.fill('ABC');
+	await ready(page);
+	const single = await stl(page);
+	await expect(page.getByRole('textbox', { name: 'Line Spacing', exact: true })).toHaveCount(0);
+	await text.fill('ABC\nAB');
+	await ready(page);
+	const twoLines = await stl(page);
+	expect(twoLines.size[1]).toBeGreaterThan(single.size[1] + 10);
+	expect(twoLines.size[0]).toBeCloseTo(single.size[0], 3);
+	await number(page, 'Line Spacing', 2);
+	expect((await stl(page)).size[1]).toBeGreaterThan(twoLines.size[1] + 10);
+	await number(page, 'Letter Spacing', 2);
+	expect((await stl(page)).size[0]).toBeCloseTo(single.size[0] + 4, 2);
+	const left = page.getByRole('button', { name: 'Align left', exact: true });
+	await left.click();
+	await expect(left).toHaveAttribute('aria-pressed', 'true');
+	await ready(page);
+	const helvetiker = await stl(page);
+
+	const font = page.getByRole('combobox', { name: 'Font', exact: true });
+	await page.locator('#font-file-input').setInputFiles({ name: 'Blocks.otf', mimeType: 'font/otf', buffer: Buffer.from(makeTestFont()) });
+	await expect(font).toHaveValue('custom-1');
+	await expect(font.locator('option:checked')).toHaveText('Blocks');
+	await ready(page);
+	expect((await stl(page)).triangles).toBeLessThan(helvetiker.triangles / 2);
+	await page.locator('#font-file-input').setInputFiles({ name: 'broken.ttf', mimeType: 'font/ttf', buffer: Buffer.from('not a font') });
+	await expect(page.getByRole('alert')).toContainText('Unable to read font');
+	await expect(font).toHaveValue('custom-1');
+
+	const pending = page.waitForEvent('download');
+	await fileMenu(page, 'Save project');
+	const project = JSON.parse((await readFile(await (await pending).path())).toString());
+	expect(project.settings.customFonts.map((entry) => entry.label)).toEqual(['Blocks']);
+	expect(project.settings.objects[0]).toMatchObject({ font: 'custom-1', align: 'left', letterSpacing: 2, lineHeight: 2, text: 'ABC\nAB' });
+});
+
+test('multi-select alignment, distribution, nudging and shortcuts', async ({ page }) => {
+	await expand(page, 'Transform');
+	const text = page.getByRole('textbox', { name: 'Text', exact: true });
+	for (const [label, x, z] of [['Second', 30, 12], ['Third', -30, -8]]) {
+		await page.getByRole('button', { name: 'Add Text Object', exact: true }).click();
+		await text.fill(label);
+		await number(page, 'Position X', x);
+		await number(page, 'Position Z', z);
+	}
+	const selectAll = async () => {
+		await page.getByRole('button', { name: 'Select ABC', exact: true }).click();
+		await page.getByRole('button', { name: 'Select Second', exact: true }).click({ modifiers: ['Shift'] });
+		await page.getByRole('button', { name: 'Select Third', exact: true }).click({ modifiers: ['Shift'] });
+		await expect(page.getByText('3 objects selected', { exact: true })).toBeVisible();
+	};
+	const positionOf = async (label, axis) => {
+		await page.getByRole('button', { name: `Select ${label}`, exact: true }).click();
+		return page.getByRole('textbox', { name: `Position ${axis}`, exact: true }).inputValue();
+	};
+
+	await selectAll();
+	const axes = page.getByRole('group', { name: 'Align axis', exact: true });
+	await axes.getByRole('button', { name: 'Z', exact: true }).click();
+	await page.getByRole('button', { name: 'Align Z center', exact: true }).click();
+	await ready(page);
+	const aligned = await positionOf('Third', 'Z');
+	expect(await positionOf('Second', 'Z')).toBe(aligned);
+	expect(await positionOf('ABC', 'Z')).toBe(aligned);
+	expect(await positionOf('Second', 'X')).toBe('30');
+
+	await selectAll();
+	await axes.getByRole('button', { name: 'X', exact: true }).click();
+	await page.getByRole('button', { name: 'Distribute along X', exact: true }).click();
+	await ready(page);
+	expect(await positionOf('Second', 'X')).toBe('30');
+	expect(await positionOf('Third', 'X')).toBe('-30');
+	expect(await positionOf('ABC', 'X')).not.toBe('0');
+
+	const x = page.getByRole('textbox', { name: 'Position X', exact: true });
+	await page.getByRole('button', { name: 'Select Second', exact: true }).click();
+	await page.keyboard.press('ArrowRight');
+	await expect(x).toHaveValue('31');
+	await page.keyboard.press('Shift+ArrowLeft');
+	await expect(x).toHaveValue('21');
+	await page.getByRole('button', { name: 'Center on face', exact: true }).click();
+	await expect(x).toHaveValue('0');
+	await expect(page.getByRole('textbox', { name: 'Position Z', exact: true })).toHaveValue('0');
+	await ready(page);
+
+	await page.getByRole('button', { name: 'Select Second', exact: true }).focus();
+	await page.keyboard.press('Control+d');
+	await expect(page.getByTestId('object-row')).toHaveCount(4);
+	await page.keyboard.press('Delete');
+	await expect(page.getByTestId('object-row')).toHaveCount(3);
+	await page.keyboard.press('Escape');
+	await expect(page.getByText('Select an object to edit it.', { exact: true })).toBeVisible();
+
+	const grid = page.getByRole('button', { name: 'Grid snap', exact: true });
+	await grid.click();
+	await expect(grid).toHaveAttribute('aria-pressed', 'true');
+	await ready(page);
 });

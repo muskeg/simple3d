@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FontLoader } from 'three/addons/loaders/FontLoader.js';
 import Viewport from './components/Viewport.jsx';
-import ControlPanel from './components/ControlPanel.jsx';
+import ScenePanel from './components/ScenePanel.jsx';
+import Inspector from './components/Inspector.jsx';
+import { useMediaQuery, usePersistentState } from './components/ui.jsx';
 import { buildModel, initGeometryEngine, withPrintLayout } from './lib/csg.js';
 import manifoldWasmURL from 'manifold-3d/manifold.wasm?url';
 import { export3MF, exportSTL, downloadBlob } from './lib/exporters.js';
@@ -10,9 +12,13 @@ import { preloadMaskImage } from './lib/mask.js';
 import { validateSvg } from './lib/svg.js';
 import { effectiveMode, objectBody } from './lib/objects.js';
 import { lidOrigin, shellEnabled, shellWall } from './lib/bodies.js';
-import { FONTS } from './lib/fonts.js';
+import { FONTS, MAX_FONT_BYTES, bufferToBase64, parseFontData } from './lib/fonts.js';
 import { parseProject, serializeProject, MAX_PROJECT_BYTES } from './lib/project.js';
 import { PRESETS, presetSettings } from './lib/presets.js';
+import { alignObjects, bodyCenter, centerOnFace, distributeObjects, nudgeObjects } from './lib/align.js';
+
+const ARROWS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
+const DEFAULT_PREFS = { gridSnap: false, gridStep: 1, angleStep: 15 };
 
 let objectIdCounter = 0;
 function makeObject(overrides = {}) {
@@ -72,7 +78,10 @@ const DEFAULT_SETTINGS = {
 	insetDepth: 2,
 	// Font
 	font: 'helvetiker',
+	customFonts: [], // uploaded TTF/OTF: { id: 'custom-N', label, data: base64 }
 };
+
+const freshSettings = () => ({ ...DEFAULT_SETTINGS, objects: [makeObject()] });
 
 export default function App() {
 	const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -82,8 +91,13 @@ export default function App() {
 	const [building, setBuilding] = useState(false);
 	const [error, setError] = useState(null);
 	const [exporting, setExporting] = useState(false);
-	const [selectedId, setSelectedId] = useState(DEFAULT_SETTINGS.objects[0].id);
+	// Selected object ids; the last one is the primary (inspected, gizmo-attached) object.
+	const [selection, setSelection] = useState([DEFAULT_SETTINGS.objects[0].id]);
 	const [builtSettings, setBuiltSettings] = useState(null);
+	const [prefs, setPrefs] = usePersistentState('simple3d.prefs', DEFAULT_PREFS);
+	const isDesktop = useMediaQuery('(min-width: 768px)');
+	const selectedId = selection.at(-1) ?? null;
+	const setSelectedId = useCallback((id) => setSelection(id == null ? [] : [id]), []);
 
 	const modelRef = useRef(null); // live model group (for export)
 	const timerRef = useRef(null);
@@ -157,6 +171,16 @@ export default function App() {
 		}));
 	}, []);
 
+	const updateObjects = useCallback((patches) => {
+		if (!Object.keys(patches).length) return;
+		setSettings((s) => ({ ...s, objects: s.objects.map((o) => (patches[o.id] ? { ...o, ...patches[o.id] } : o)) }));
+	}, []);
+
+	const selectObject = useCallback((id, additive = false) => {
+		if (!additive) return setSelection([id]);
+		setSelection((current) => (current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id]));
+	}, []);
+
 	const addObject = useCallback(
 		(type = 'text') => {
 			const obj = makeObject({ type, font: settings.font, ...OBJECT_DEFAULTS[type], ...facePlacementPreset('top', settings) });
@@ -194,18 +218,99 @@ export default function App() {
 		updateObject(id, { image: dataURL });
 	}, [updateObject]);
 
-	const duplicateObject = useCallback((id) => {
-		const src = settings.objects.find((object) => object.id === id);
-		if (!src) return;
-		const copy = { ...src, id: ++objectIdCounter, pos: { ...src.pos, x: src.pos.x + 6 } };
-		setSettings((s) => ({ ...s, objects: [...s.objects, copy] }));
-		setSelectedId(copy.id);
+	const duplicateObjects = useCallback((ids) => {
+		const copies = ids.map((id) => settings.objects.find((object) => object.id === id)).filter(Boolean)
+			.map((src) => ({ ...src, id: ++objectIdCounter, pos: { ...src.pos, x: src.pos.x + 6 }, face: 'auto' }));
+		if (!copies.length) return;
+		setSettings((s) => ({ ...s, objects: [...s.objects, ...copies] }));
+		setSelection(copies.map((copy) => copy.id));
 	}, [settings]);
 
-	const removeObject = useCallback((id) => {
-		setSettings((s) => ({ ...s, objects: s.objects.filter((o) => o.id !== id) }));
-		setSelectedId((sel) => (sel === id ? settings.objects.find((object) => object.id !== id)?.id ?? null : sel));
+	const removeObjects = useCallback((ids) => {
+		setSettings((s) => ({ ...s, objects: s.objects.filter((o) => !ids.includes(o.id)) }));
+		setSelection((current) => {
+			const remaining = current.filter((id) => !ids.includes(id));
+			if (remaining.length || !current.some((id) => ids.includes(id))) return remaining;
+			const fallback = settings.objects.find((object) => !ids.includes(object.id));
+			return fallback ? [fallback.id] : [];
+		});
 	}, [settings.objects]);
+
+	// Viewport drags move the whole selection by the primary object's translation; rotation stays per object.
+	const onViewportUpdate = useCallback((id, patch) => {
+		setSettings((s) => {
+			const source = s.objects.find((object) => object.id === id);
+			if (!source) return s;
+			const group = selection.includes(id) ? selection : [id];
+			const delta = patch.pos ? ['x', 'y', 'z'].map((axis) => patch.pos[axis] - source.pos[axis]) : [0, 0, 0];
+			return {
+				...s,
+				objects: s.objects.map((o) => {
+					if (o.id === id) return { ...o, ...patch };
+					if (!group.includes(o.id)) return o;
+					return { ...o, pos: { x: o.pos.x + delta[0], y: o.pos.y + delta[1], z: o.pos.z + delta[2] }, face: 'auto' };
+				}),
+			};
+		});
+	}, [selection]);
+
+	const onAlign = useCallback((ids, axis, edge) => {
+		updateObjects(alignObjects(settings.objects.filter((o) => ids.includes(o.id)), axis, edge, font, settings));
+	}, [settings, font, updateObjects]);
+	const onDistribute = useCallback((ids, axis) => {
+		updateObjects(distributeObjects(settings.objects.filter((o) => ids.includes(o.id)), axis, font, settings));
+	}, [settings, font, updateObjects]);
+	const onCenterOnFace = useCallback((id, directions) => {
+		const object = settings.objects.find((o) => o.id === id);
+		if (object) updateObject(id, centerOnFace(object, settings, directions));
+	}, [settings, updateObject]);
+	const onCenterOnBody = useCallback((id, axis) => {
+		const object = settings.objects.find((o) => o.id === id);
+		if (object) updateObject(id, { pos: { ...object.pos, [axis]: bodyCenter(settings, objectBody(object, settings) || 'base')[axis] }, face: 'auto' });
+	}, [settings, updateObject]);
+
+	const addCustomFont = useCallback(async (file, objectId) => {
+		if (file.size > MAX_FONT_BYTES) throw new Error('Font exceeds the 10 MB limit.');
+		const data = bufferToBase64(await file.arrayBuffer());
+		parseFontData(data);
+		const fonts = settings.customFonts || [];
+		const existing = fonts.find((entry) => entry.data === data);
+		if (!existing && fonts.length >= 8) throw new Error('Projects are limited to 8 uploaded fonts.');
+		const id = existing?.id ?? `custom-${Math.max(0, ...fonts.map((entry) => Number(entry.id.slice(7)))) + 1}`;
+		const label = file.name.replace(/\.(ttf|otf)$/i, '').slice(0, 64) || 'Uploaded font';
+		setSettings((s) => ({
+			...s,
+			customFonts: existing ? s.customFonts : [...(s.customFonts || []), { id, label, data }],
+			objects: s.objects.map((o) => (o.id === objectId ? { ...o, font: id } : o)),
+		}));
+	}, [settings.customFonts]);
+
+	const latest = useRef(null);
+	latest.current = { settings, selection, removeObjects, duplicateObjects, updateObjects };
+	useEffect(() => {
+		const onKey = (event) => {
+			if (event.target.closest?.('input, textarea, select, [contenteditable="true"], [role="menu"]') || document.querySelector('[role="menu"]')) return;
+			const { settings: s, selection: ids, removeObjects: remove, duplicateObjects: duplicate, updateObjects: update } = latest.current;
+			const modifier = event.ctrlKey || event.metaKey;
+			if (event.key === 'Escape') return setSelection([]);
+			if (!ids.length) return;
+			if (event.key === 'Delete' || event.key === 'Backspace') {
+				event.preventDefault();
+				remove(ids);
+			} else if (modifier && event.key.toLowerCase() === 'd') {
+				event.preventDefault();
+				duplicate(ids);
+			} else if (ARROWS[event.key] && !modifier) {
+				const objects = s.objects.filter((o) => ids.includes(o.id));
+				const primary = objects.find((o) => o.id === ids.at(-1));
+				if (!primary) return;
+				event.preventDefault();
+				update(nudgeObjects(objects, primary, ARROWS[event.key], event.shiftKey ? 10 : event.altKey ? 0.1 : 1));
+			}
+		};
+		window.addEventListener('keydown', onKey);
+		return () => window.removeEventListener('keydown', onKey);
+	}, []);
 
 	const snapToFace = useCallback((id, face) => {
 		setSettings((s) => ({
@@ -225,7 +330,12 @@ export default function App() {
 		savedRef.current = next;
 		setSettings(next);
 		setSelectedId(next.objects[0]?.id ?? null);
-	}, []);
+	}, [setSelectedId]);
+
+	const onNewProject = useCallback(() => {
+		if (settings !== savedRef.current && !window.confirm('Discard unsaved changes and start a new project?')) return;
+		replaceSettings(freshSettings());
+	}, [settings, replaceSettings]);
 
 	const onSaveProject = useCallback(() => {
 		downloadBlob(new Blob([serializeProject(settings)], { type: 'application/json' }), 'simple3d-project.json');
@@ -284,37 +394,57 @@ export default function App() {
 		}
 	}, [ready]);
 
+	const inspector = (
+		<Inspector
+			settings={settings}
+			selection={selection}
+			updateObject={updateObject}
+			duplicateObjects={duplicateObjects}
+			removeObjects={removeObjects}
+			snapToFace={snapToFace}
+			setObjectTarget={setObjectTarget}
+			setObjectImage={setObjectImage}
+			setObjectSvg={setObjectSvg}
+			addCustomFont={addCustomFont}
+			onAlign={onAlign}
+			onDistribute={onDistribute}
+			onCenterOnFace={onCenterOnFace}
+			onCenterOnBody={onCenterOnBody}
+			prefs={prefs}
+			setPrefs={setPrefs}
+			className={isDesktop ? 'min-h-full' : ''}
+		/>
+	);
+
 	return (
 		<div className="flex h-full w-full flex-col md:flex-row bg-neutral-950 text-neutral-100">
-			<ControlPanel
+			<ScenePanel
 				settings={settings}
 				setNumber={setNumber}
 				setMode={setMode}
-				updateObject={updateObject}
+				selection={selection}
+				onSelect={selectObject}
 				addObject={addObject}
 				addImageObject={addImageObject}
-				setObjectImage={setObjectImage}
 				addSvgObject={addSvgObject}
-				setObjectSvg={setObjectSvg}
-				setObjectTarget={setObjectTarget}
-				duplicateObject={duplicateObject}
-				removeObject={removeObject}
-				snapToFace={snapToFace}
-				selectedId={selectedId}
-				setSelectedId={setSelectedId}
-				onExport3MF={onExport3MF}
-				onExportSTL={onExportSTL}
+				duplicateObjects={duplicateObjects}
+				removeObjects={removeObjects}
+				onNewProject={onNewProject}
 				onSaveProject={onSaveProject}
 				onLoadProject={onLoadProject}
 				onApplyPreset={onApplyPreset}
+				onExport3MF={onExport3MF}
+				onExportSTL={onExportSTL}
 				building={building}
 				exporting={exporting}
 				error={error}
 				warning={warning}
 				fontError={fontError}
 				ready={ready}
+				inspector={isDesktop ? null : inspector}
 			/>
-			<Viewport model={model} onModelRef={onModelRef} settings={settings} fonts={font} selectedId={selectedId} onSelect={setSelectedId} onUpdate={updateObject} />
+			<Viewport model={model} onModelRef={onModelRef} settings={settings} fonts={font} selection={selection} onSelect={selectObject} onUpdate={onViewportUpdate} prefs={prefs} onToggleGridSnap={() => setPrefs({ ...prefs, gridSnap: !prefs.gridSnap })} />
+			{isDesktop && <aside aria-label="Inspector" className="panel-scroll w-[300px] shrink-0 overflow-y-auto border-l border-white/10 bg-neutral-900">{inspector}</aside>}
 		</div>
 	);
 }

@@ -3,14 +3,16 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
-import { Move3D, Rotate3D, Magnet, Maximize, Blend, PackageOpen } from 'lucide-react';
+import { Move3D, Rotate3D, Magnet, Maximize, Blend, PackageOpen, Grid3x3 } from 'lucide-react';
 import { disposeGroup } from '../lib/csg.js';
 import { placeObject } from '../lib/csg.js';
 import { createBodyGeometry, lidEnabled } from '../lib/bodies.js';
 import { createObjectGeometry, objectBody } from '../lib/objects.js';
 import { quaternionFromRot, rotFromQuaternion, surfacePlacement } from '../lib/placement.js';
+import { snapToGrid } from '../lib/align.js';
 
-export default function Viewport({ model, onModelRef, settings, fonts, selectedId, onSelect, onUpdate }) {
+export default function Viewport({ model, onModelRef, settings, fonts, selection, onSelect, onUpdate, prefs, onToggleGridSnap }) {
+	const selectedId = selection.at(-1) ?? null;
 	const mountRef = useRef(null);
 	const axisRef = useRef(null);
 	const threeRef = useRef(null);
@@ -23,7 +25,7 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 	const [viewportError, setViewportError] = useState(null);
 	const hasLid = lidEnabled(settings);
 	const showLayout = printLayout && hasLid;
-	latest.current = { settings, fonts, selectedId, onSelect, onUpdate, snap };
+	latest.current = { settings, fonts, selectedId, selection, onSelect, onUpdate, snap, prefs };
 
 	// One-time scene / renderer / controls setup.
 	useEffect(() => {
@@ -137,6 +139,8 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 		outline.visible = false;
 		outline.material.depthTest = false;
 		scene.add(outline);
+		const secondaryOutlines = new THREE.Group();
+		scene.add(secondaryOutlines);
 		const raycaster = new THREE.Raycaster();
 		let directDrag = null;
 		let gizmoDragging = false;
@@ -157,6 +161,15 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 				transform.attach(root);
 				outline.setFromObject(root);
 			}
+			disposeGroup(secondaryOutlines);
+			secondaryOutlines.clear();
+			for (const other of latest.current.selection) {
+				const proxy = other !== id && proxies.children.find((child) => child.userData.id === other);
+				if (!proxy) continue;
+				const helper = new THREE.BoxHelper(proxy, 0x7c8cff);
+				helper.material.depthTest = false;
+				secondaryOutlines.add(helper);
+			}
 		};
 		transform.addEventListener('dragging-changed', (event) => {
 			gizmoDragging = event.value;
@@ -170,6 +183,11 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 			const hit = raycaster.intersectObjects(proxies.children, true)[0];
 			if (!hit) return;
 			const root = hit.object.parent;
+			if (event.shiftKey || event.ctrlKey || event.metaKey) {
+				latest.current.onSelect(root.userData.id, true);
+				event.stopImmediatePropagation();
+				return;
+			}
 			latest.current.onSelect(root.userData.id);
 			select(root.userData.id);
 			if (transform.mode !== 'translate') return;
@@ -190,13 +208,15 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 			const root = directDrag.root;
 			const surface = threeRef.current.surfaces[root.userData.body];
 			const hit = latest.current.snap && surface ? raycaster.intersectObject(surface)[0] : null;
+			const { gridSnap, gridStep } = latest.current.prefs;
+			const step = gridSnap ? gridStep : 0;
 			if (hit) {
-				const placement = surfacePlacement(hit.point, hit.face.normal, directDrag.rotation);
+				const placement = surfacePlacement(snapToGrid(hit.point.clone(), hit.face.normal, step), hit.face.normal, directDrag.rotation);
 				root.position.set(placement.pos.x, placement.pos.y, placement.pos.z);
 				root.quaternion.copy(quaternionFromRot(placement.rot));
 			} else {
 				const point = raycaster.ray.intersectPlane(directDrag.plane, new THREE.Vector3());
-				if (point) root.position.copy(directDrag.position).add(point.sub(directDrag.start));
+				if (point) snapToGrid(root.position.copy(directDrag.position).add(point.sub(directDrag.start)), directDrag.plane.normal, step);
 			}
 			root.children[0].material.opacity = 0.45;
 			root.updateMatrixWorld(true);
@@ -288,6 +308,7 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 			transform.dispose();
 			outline.geometry.dispose();
 			outline.material.dispose();
+			disposeGroup(secondaryOutlines);
 			disposeGroup(proxies);
 			for (const surface of Object.values(threeRef.current?.surfaces || {})) {
 				surface.geometry.dispose();
@@ -392,8 +413,14 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 		state.select(latest.current.selectedId);
 	}, [settings, fonts, showLayout]);
 
-	useEffect(() => { threeRef.current?.select(selectedId); }, [selectedId]);
+	useEffect(() => { threeRef.current?.select(selectedId); }, [selection, selectedId]);
 	useEffect(() => { threeRef.current?.transform.setMode(mode); }, [mode]);
+	useEffect(() => {
+		const transform = threeRef.current?.transform;
+		if (!transform) return;
+		transform.setTranslationSnap(prefs.gridSnap ? prefs.gridStep : null);
+		transform.setRotationSnap(prefs.gridSnap ? THREE.MathUtils.degToRad(prefs.angleStep) : null);
+	}, [prefs.gridSnap, prefs.gridStep, prefs.angleStep]);
 
 	return (
 		<div className="relative min-h-[240px] min-w-0 flex-1" data-testid="viewport">
@@ -404,6 +431,7 @@ export default function Viewport({ model, onModelRef, settings, fonts, selectedI
 					<button key={id} title={label} aria-label={label} aria-pressed={mode === id} onClick={() => setMode(id)} className={`h-9 w-9 grid place-items-center rounded ${mode === id ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-700'}`}><Icon size={18} /></button>
 				))}
 				<button title="Snap to surface" aria-label="Snap to surface" aria-pressed={snap} onClick={() => setSnap(!snap)} className={`h-9 w-9 grid place-items-center rounded ${snap ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-700'}`}><Magnet size={18} /></button>
+				<button title={`Grid snap (${prefs.gridStep} mm, ${prefs.angleStep}°)`} aria-label="Grid snap" aria-pressed={prefs.gridSnap} onClick={onToggleGridSnap} className={`h-9 w-9 grid place-items-center rounded ${prefs.gridSnap ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-700'}`}><Grid3x3 size={18} /></button>
 				<button title="Fit model (F)" aria-label="Fit model (F)" onClick={() => threeRef.current?.fit()} className="h-9 w-9 grid place-items-center rounded text-neutral-300 hover:bg-neutral-700"><Maximize size={18} /></button>
 				<button title="Transparent base preview" aria-label="Transparent base preview" aria-pressed={transparentBase} onClick={() => setTransparentBase(!transparentBase)} className={`h-9 w-9 grid place-items-center rounded ${transparentBase ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-700'}`}><Blend size={18} /></button>
 				{hasLid && <button title="Lay out for print" aria-label="Lay out for print" aria-pressed={showLayout} onClick={() => setPrintLayout(!printLayout)} className={`h-9 w-9 grid place-items-center rounded ${showLayout ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-700'}`}><PackageOpen size={18} /></button>}

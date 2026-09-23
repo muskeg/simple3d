@@ -1,5 +1,5 @@
 import { BASE_SHAPES } from './baseShapes.js';
-import { FONTS } from './fonts.js';
+import { FONTS, CUSTOM_FONT_ID, MAX_FONT_BYTES } from './fonts.js';
 import { FACES } from './placement.js';
 import { SHAPE_KINDS } from './shapes2d.js';
 import { OBJECT_MODES, HOLE_HEADS } from './objects.js';
@@ -20,20 +20,24 @@ const OBJECT_NUMBERS = {
 	fontSize: [0.5, 300], curveSegments: [2, 32], extrudeHeight: [0.05, 200], inlayDepth: [0.1, 100], insetDepth: [0.1, 100],
 	threshold: [1, 255], maskResolution: [32, 1024], shapeHeight: [0.5, 300], sides: [3, 24], innerRatio: [0.1, 0.95],
 	cornerRadius: [0, 150], holeDiameter: [0.2, 200], headDiameter: [0.2, 300], headDepth: [0.1, 100],
+	letterSpacing: [-50, 100], lineHeight: [0.5, 3],
 };
+export const MAX_TEXT_LENGTH = 1000;
+const MAX_CUSTOM_FONTS = 8;
 const INTEGER_KEYS = new Set(['chamferSegments', 'radialSegments', 'sides', 'curveSegments', 'threshold', 'maskResolution']);
 const ids = (list) => list.map((entry) => entry.id);
 const OBJECT_ENUMS = {
 	type: ['text', 'image', 'svg', 'shape', 'hole'],
 	mode: ids(OBJECT_MODES),
 	target: ['base', 'lid'],
-	font: ids(FONTS),
 	shape: ids(SHAPE_KINDS),
 	head: ids(HOLE_HEADS),
 	maskChannel: ['alpha', 'dark', 'light'],
 	face: FACES,
+	align: ['left', 'center', 'right'],
 };
 const IMAGE_DATA_URL = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
+const BASE64 = /^[A-Za-z0-9+/=]+$/;
 
 export function serializeProject(settings) {
 	return JSON.stringify({ app: PROJECT_APP, version: PROJECT_VERSION, settings });
@@ -56,7 +60,7 @@ function vector(value, limit) {
 	return result;
 }
 
-function sanitizeObject(raw, index) {
+function sanitizeObject(raw, index, fontIds) {
 	if (!raw || typeof raw !== 'object') throw new Error(`Object ${index + 1} is invalid.`);
 	const type = OBJECT_ENUMS.type.includes(raw.type) ? raw.type : null;
 	if (!type) throw new Error(`Object ${index + 1} has an unsupported type.`);
@@ -64,7 +68,7 @@ function sanitizeObject(raw, index) {
 	const rot = vector(raw.rot, 3600);
 	if (!pos || !rot) throw new Error(`Object ${index + 1} has an invalid position or rotation.`);
 	const object = { id: Number.isInteger(raw.id) && raw.id > 0 ? raw.id : null, type, pos, rot };
-	if (typeof raw.text === 'string') object.text = raw.text.slice(0, 256);
+	if (typeof raw.text === 'string') object.text = raw.text.slice(0, MAX_TEXT_LENGTH);
 	if (typeof raw.mirror === 'boolean') object.mirror = raw.mirror;
 	for (const [key, limits] of Object.entries(OBJECT_NUMBERS)) {
 		const value = number(raw[key], limits, INTEGER_KEYS.has(key));
@@ -73,6 +77,7 @@ function sanitizeObject(raw, index) {
 	for (const [key, allowed] of Object.entries(OBJECT_ENUMS)) {
 		if (key !== 'type' && allowed.includes(raw[key])) object[key] = raw[key];
 	}
+	if (fontIds.includes(raw.font)) object.font = raw.font;
 	object.face ??= 'auto';
 	if (type === 'image') {
 		if (typeof raw.image !== 'string' || !IMAGE_DATA_URL.test(raw.image)) throw new Error(`Image object ${index + 1} has invalid image data.`);
@@ -83,6 +88,18 @@ function sanitizeObject(raw, index) {
 		object.svg = raw.svg;
 	}
 	return object;
+}
+
+function sanitizeFonts(raw) {
+	if (!Array.isArray(raw) || raw.length > MAX_CUSTOM_FONTS) throw new Error(`Projects are limited to ${MAX_CUSTOM_FONTS} uploaded fonts.`);
+	const seen = new Set();
+	return raw.map((font, index) => {
+		const valid = font && CUSTOM_FONT_ID.test(font.id) && !seen.has(font.id) && typeof font.label === 'string'
+			&& typeof font.data === 'string' && font.data.length <= Math.ceil(MAX_FONT_BYTES / 3) * 4 && BASE64.test(font.data);
+		if (!valid) throw new Error(`Uploaded font ${index + 1} is invalid.`);
+		seen.add(font.id);
+		return { id: font.id, label: font.label.slice(0, 64), data: font.data };
+	});
 }
 
 /**
@@ -105,11 +122,13 @@ export function parseProject(text, defaults) {
 	if (ids(BASE_SHAPES).includes(raw.baseShape)) settings.baseShape = raw.baseShape;
 	if (['raised', 'inset', 'flush_inlay'].includes(raw.mode)) settings.mode = raw.mode;
 	if (ids(FONTS).includes(raw.font)) settings.font = raw.font;
+	if (raw.customFonts !== undefined) settings.customFonts = sanitizeFonts(raw.customFonts);
+	const fontIds = [...ids(FONTS), ...ids(settings.customFonts || [])];
 	if (!Array.isArray(raw.objects)) throw new Error('Project has no object list.');
 	if (raw.objects.length > MAX_OBJECTS) throw new Error(`Projects are limited to ${MAX_OBJECTS} objects.`);
 	const used = new Set();
 	let maxId = 0;
-	const objects = raw.objects.map(sanitizeObject);
+	const objects = raw.objects.map((object, index) => sanitizeObject(object, index, fontIds));
 	for (const object of objects) if (object.id && !used.has(object.id)) { used.add(object.id); maxId = Math.max(maxId, object.id); } else object.id = null;
 	for (const object of objects) if (!object.id) object.id = ++maxId;
 	settings.objects = objects;

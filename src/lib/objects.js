@@ -31,7 +31,7 @@ export function objectBody(object, settings) {
 }
 
 export function objectLabel(object) {
-	if (object.type === 'text') return object.text || 'empty text';
+	if (object.type === 'text') return object.text?.split('\n').find((line) => line.trim()) || 'empty text';
 	if (object.type === 'hole') return `Hole ⌀${object.holeDiameter ?? 5}`;
 	if (object.type === 'shape') return object.shape ? object.shape[0].toUpperCase() + object.shape.slice(1) : 'Shape';
 	return object.text || (object.type === 'svg' ? 'SVG' : 'Image');
