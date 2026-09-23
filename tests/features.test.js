@@ -116,6 +116,39 @@ test('holes cut through inlays and raised objects too', () => {
 	disposeGroup(withoutHole); disposeGroup(withHole); disposeGroup(raised);
 });
 
+test('first-wall holes cross only the near wall of a hollow body', () => {
+	const shell = { ...flat, height: 30, shell: true, wall: 2, openTop: false };
+	const onTop = { ...hole, pos: { x: 0, y: 15, z: 0 } };
+	const empty = buildModel(shell, fonts);
+	const through = buildModel({ ...shell, objects: [onTop] }, fonts);
+	const first = buildModel({ ...shell, objects: [{ ...onTop, holeDepthMode: 'first' }] }, fonts);
+	near(volume(through), volume(empty) - 2 * polygonArea(3) * 2, 0.01);
+	near(volume(first), volume(empty) - polygonArea(3) * 2, 0.01);
+	assertClosed(first);
+	disposeGroup(empty); disposeGroup(through); disposeGroup(first);
+});
+
+test('first-wall holes still go all the way through a solid body; fixed depths are blind', () => {
+	const first = buildModel({ ...flat, objects: [{ ...hole, holeDepthMode: 'first' }] }, fonts);
+	near(volume(first), boxVolume - polygonArea(3) * flat.height, 0.01);
+	const blind = buildModel({ ...flat, objects: [{ ...hole, holeDepthMode: 'fixed', holeDepth: 5 }] }, fonts);
+	near(volume(blind), boxVolume - polygonArea(3) * 5, 0.01);
+	assertClosed(blind);
+	disposeGroup(first); disposeGroup(blind);
+});
+
+test('first-wall radial holes in a curved hollow wall leave no slivers at the rim', () => {
+	const tube = { ...flat, baseShape: 'cylinder', width: 60, depth: 60, height: 40, radialSegments: 64, shell: true, wall: 3, openTop: false };
+	const radial = { ...hole, holeDiameter: 10, ...facePlacementPreset('right', tube) };
+	const build = (patch) => { const group = buildModel({ ...tube, objects: [{ ...radial, ...patch }] }, fonts); const result = volume(group); disposeGroup(group); return result; };
+	const first = build({ holeDepthMode: 'first' });
+	// A fixed depth well past the wall (but short of the far side) removes exactly the first wall's material.
+	near(first, build({ holeDepthMode: 'fixed', holeDepth: 8 }), 0.01);
+	// Stopping where the center line exits would leave material at the rim.
+	assert.ok(build({ holeDepthMode: 'fixed', holeDepth: 3.05 }) > first + 0.5);
+	assert.ok(build({ holeDepthMode: 'through' }) < first - 50);
+});
+
 for (const kind of SHAPE_KINDS) {
 	test(`${kind.id} shape has an exact footprint and builds a closed solid`, () => {
 		const shape = { id: 4, type: 'shape', shape: kind.id, fontSize: 30, shapeHeight: 18, sides: 6, innerRatio: 0.4, cornerRadius: 3, ...top };
@@ -209,7 +242,7 @@ test('lid objects are skipped when the lid is disabled', () => {
 });
 
 test('project files round-trip and reject or clamp untrusted values', () => {
-	const settings = { ...flat, shell: true, lid: true, objects: [{ ...text, mode: 'inset', mirror: true, target: 'lid' }, { ...hole, head: 'countersink', headDiameter: 10 }] };
+	const settings = { ...flat, shell: true, lid: true, objects: [{ ...text, mode: 'inset', mirror: true, target: 'lid' }, { ...hole, head: 'countersink', headDiameter: 10, holeDepthMode: 'first', holeDepth: 4 }] };
 	const { settings: loaded, maxId } = parseProject(serializeProject(settings), flat);
 	assert.deepEqual(loaded, settings);
 	assert.equal(maxId, 9);

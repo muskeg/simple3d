@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { quaternionFromRot } from './placement.js';
 import { getEngine, toSolid, solidToGeometry } from './engine.js';
 import { createBaseSolid, createLidSolid, lidPrintMatrix } from './bodies.js';
-import { createObjectGeometry, effectiveMode, objectBody } from './objects.js';
+import { createObjectGeometry, effectiveMode, firstWallDepth, objectBody } from './objects.js';
 import { expandObjects } from './arrays.js';
 
 export { initGeometryEngine } from './engine.js';
@@ -78,11 +78,22 @@ function buildBody(body, bodySolid, settings, fonts, parent, track, release) {
 	let result = bodySolid;
 	const inlays = [];
 	const objects = expandObjects((settings.objects || []).filter((object) => objectBody(object, settings) === body));
-	// Array copies share their source's geometry; only the placement differs.
+	// First-wall holes probe the body as it was before any object was applied.
+	const bodyMesh = objects.some((object) => object.type === 'hole' && object.holeDepthMode === 'first')
+		? new THREE.Mesh(solidToGeometry(bodySolid), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }))
+		: null;
+	const holeDepth = (object) => {
+		if (object.holeDepthMode === 'fixed') return Math.max(0.1, object.holeDepth ?? 3);
+		if (object.holeDepthMode === 'first') return firstWallDepth(object, bodyMesh) ?? undefined;
+		return undefined;
+	};
+	// Array copies share their source's geometry; only the placement (and a first-wall depth) differs.
 	const geometries = new Map();
 	const cutterFor = (object, mode) => {
-		if (!geometries.has(object.id)) geometries.set(object.id, createObjectGeometry(object, fonts, settings));
-		const geometry = geometries.get(object.id);
+		const depth = mode === 'hole' ? holeDepth(object) : undefined;
+		const key = depth === undefined ? object.id : `${object.id}|${depth}`;
+		if (!geometries.has(key)) geometries.set(key, createObjectGeometry(object, fonts, settings, { holeDepth: depth }));
+		const geometry = geometries.get(key);
 		return geometry ? track(toSolid(geometry, placeObject(geometry, object, settings, mode).matrixWorld)) : null;
 	};
 	const replace = (previous, next) => { release(previous); return track(next); };
@@ -102,6 +113,8 @@ function buildBody(body, bodySolid, settings, fonts, parent, track, release) {
 		}
 	} finally {
 		for (const geometry of geometries.values()) geometry?.dispose();
+		bodyMesh?.geometry.dispose();
+		bodyMesh?.material.dispose();
 	}
 	for (const inlay of inlays) {
 		const mesh = resultMesh(inlay.solid, inlay.name, 0xe8a33d, body);

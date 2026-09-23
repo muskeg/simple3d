@@ -404,7 +404,7 @@ export default function Viewport({ model, onModelRef, settings, fonts, selection
 			if (!body || (body === 'lid' && showLayout)) continue;
 			let geometry;
 			try {
-				geometry = createObjectGeometry(object, fonts, settings, 1);
+				geometry = createObjectGeometry(object, fonts, settings, { holeLength: 1 });
 			} catch { continue; }
 			if (!geometry) continue;
 			const root = new THREE.Group();

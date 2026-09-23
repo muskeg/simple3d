@@ -5,7 +5,7 @@ import { TYPE_ICONS, MODES, readImageFile, readSvgFile } from './ScenePanel.jsx'
 import { rotateAboutWorldAxis } from '../lib/placement.js';
 import { fontOptions } from '../lib/fonts.js';
 import { SHAPE_KINDS } from '../lib/shapes2d.js';
-import { OBJECT_MODES, HOLE_HEADS, effectiveMode, objectLabel } from '../lib/objects.js';
+import { OBJECT_MODES, HOLE_HEADS, HOLE_DEPTHS, effectiveMode, objectLabel } from '../lib/objects.js';
 import { lidEnabled } from '../lib/bodies.js';
 import { MAX_TEXT_LENGTH } from '../lib/project.js';
 import { ARRAY_KINDS, MAX_ARRAY_INSTANCES } from '../lib/arrays.js';
@@ -169,7 +169,11 @@ export default function Inspector({
 						<Select label="Hole Head" value={selected.head || 'none'} onChange={(head) => update({ head })} options={HOLE_HEADS} />
 						{selected.head && selected.head !== 'none' && <NumberField label="Head Diameter" value={selected.headDiameter ?? 10} min={0.2} max={300} step={0.1} suffix=" mm" onChange={(v) => update({ headDiameter: v })} />}
 						{selected.head === 'counterbore' && <NumberField label="Head Depth" value={selected.headDepth ?? 3} min={0.1} max={100} step={0.1} suffix=" mm" onChange={(v) => update({ headDepth: v })} />}
-						<p className="text-[11px] leading-relaxed text-neutral-500">Cuts straight through its body along the object axis, including inlays and raised objects.</p>
+						<Select label="Hole Depth" value={selected.holeDepthMode || 'through'} onChange={(holeDepthMode) => update({ holeDepthMode })} options={HOLE_DEPTHS} />
+						{selected.holeDepthMode === 'fixed' && <NumberField label="Blind Depth" value={selected.holeDepth ?? 3} min={0.1} max={200} step={0.1} suffix=" mm" onChange={(v) => update({ holeDepth: Math.max(0.1, v) })} />}
+						<p className="text-[11px] leading-relaxed text-neutral-500">
+							{{ first: 'Stops once it has crossed the first wall along the object axis, e.g. one side of a hollow box.', fixed: 'A blind hole measured from the anchor along the object axis.' }[selected.holeDepthMode] || 'Cuts straight through its body along the object axis.'} Holes also cut inlays and raised objects.
+						</p>
 					</>
 				) : (
 					<>

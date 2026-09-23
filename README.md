@@ -96,8 +96,13 @@ a valid base-only model. Empty text adds no geometry.
 - Every object except holes has its own **Object Mode**: Default (follows the
 	global Operation Mode), Raised, Inset or Flush inlay, with its own depths.
 - **Mirror** flips an object's reading direction, for stamps.
-- **Holes** cut straight through their body along the object axis (plain,
-	countersunk at 90°, or counterbored) and also cut raised objects and inlays.
+- **Holes** cut along the object axis (plain, countersunk at 90°, or
+	counterbored) and also cut raised objects and inlays. **Hole Depth** is
+	**Through all** (the whole body), **First wall** (stops just past the first
+	wall it crosses, so a hole in a hollow box pierces only one side; on a solid
+	body this is the same as through) or **Fixed depth** (a blind hole of Blind
+	Depth mm). First wall probes the shaft's center and rim, so curved walls are
+	cleared fully without reaching the next wall.
 - **SVG** files (up to 2 MB) use their filled paths; overlapping paths are
 	unioned. SVG Width sets the outline width. SVGs are parsed as XML only and
 	never inserted into the page.

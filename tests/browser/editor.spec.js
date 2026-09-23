@@ -40,16 +40,23 @@ async function stl(page) {
 			const data = new DataView(await captured.arrayBuffer());
 			const triangles = data.getUint32(80, true);
 			const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+			let volume = 0;
 			for (let triangle = 0; triangle < triangles; triangle++) {
+				const corners = [];
 				for (let vertex = 0; vertex < 3; vertex++) {
+					const corner = [];
 					for (let axis = 0; axis < 3; axis++) {
 						const value = data.getFloat32(84 + triangle * 50 + 12 + vertex * 12 + axis * 4, true);
 						if (!Number.isFinite(value)) throw new Error('Invalid STL vertex');
 						min[axis] = Math.min(min[axis], value); max[axis] = Math.max(max[axis], value);
+						corner.push(value);
 					}
+					corners.push(corner);
 				}
+				const [a, b, c] = corners;
+				volume += (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6;
 			}
-			return { triangles, min, max, size: max.map((value, index) => value - min[index]) };
+			return { triangles, min, max, size: max.map((value, index) => value - min[index]), volume };
 		} finally { URL.createObjectURL = original; }
 	});
 }
@@ -467,6 +474,31 @@ test('hollow shell with lid exports a separate lid laid out for printing', async
 	await expect(page.getByRole('status')).toContainText('break through');
 	await number(page, 'Object Inset Depth', 1);
 	await expect(page.getByRole('status')).toHaveCount(0);
+});
+
+test('hole depth: through all, first wall only, or a blind depth', async ({ page }) => {
+	await tab(page, 'Base');
+	await number(page, 'Height', 30);
+	await page.getByRole('checkbox', { name: 'Hollow shell', exact: true }).check();
+	await ready(page);
+	await tab(page, 'Objects');
+	await page.getByRole('button', { name: 'Delete ABC', exact: true }).click();
+	await page.getByRole('button', { name: 'Add Hole', exact: true }).click();
+	await page.getByRole('button', { name: 'front', exact: true }).click();
+	await number(page, 'Hole Diameter', 6);
+	const depth = page.getByRole('combobox', { name: 'Hole Depth', exact: true });
+	await expect(depth).toHaveValue('through');
+	const through = await stl(page);
+	await depth.selectOption('first');
+	await ready(page);
+	const first = await stl(page);
+	// One 2 mm wall of a 6 mm hole is spared (48-sided cutter: ~28.2 mm² cross-section).
+	expect(first.volume - through.volume).toBeGreaterThan(54);
+	expect(first.volume - through.volume).toBeLessThan(59);
+	await depth.selectOption('fixed');
+	await expect(page.getByRole('textbox', { name: 'Blind Depth', exact: true })).toHaveValue('3');
+	await number(page, 'Blind Depth', 1);
+	expect((await stl(page)).volume - first.volume).toBeGreaterThan(25);
 });
 
 test('presets and project save/load round-trip', async ({ page }) => {

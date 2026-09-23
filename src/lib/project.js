@@ -2,7 +2,7 @@ import { BASE_SHAPES } from './baseShapes.js';
 import { FONTS, CUSTOM_FONT_ID, MAX_FONT_BYTES } from './fonts.js';
 import { FACES } from './placement.js';
 import { SHAPE_KINDS } from './shapes2d.js';
-import { OBJECT_MODES, HOLE_HEADS } from './objects.js';
+import { OBJECT_MODES, HOLE_HEADS, HOLE_DEPTHS } from './objects.js';
 import { MAX_SVG_BYTES } from './svg.js';
 import { ARRAY_KINDS } from './arrays.js';
 
@@ -20,7 +20,7 @@ const SETTINGS_BOOLEANS = ['shell', 'openTop', 'lid'];
 const OBJECT_NUMBERS = {
 	fontSize: [0.5, 300], curveSegments: [2, 32], extrudeHeight: [0.05, 200], inlayDepth: [0.1, 100], insetDepth: [0.1, 100],
 	threshold: [1, 255], maskResolution: [32, 1024], shapeHeight: [0.5, 300], sides: [3, 24], innerRatio: [0.1, 0.95],
-	cornerRadius: [0, 150], holeDiameter: [0.2, 200], headDiameter: [0.2, 300], headDepth: [0.1, 100],
+	cornerRadius: [0, 150], holeDiameter: [0.2, 200], headDiameter: [0.2, 300], headDepth: [0.1, 100], holeDepth: [0.1, 1000],
 	letterSpacing: [-50, 100], lineHeight: [0.5, 3],
 	arrayCount: [1, 400], arrayRows: [1, 400], arraySpacing: [-1000, 1000], arrayRowSpacing: [-1000, 1000], arrayRadius: [0.1, 1000], arraySweep: [1, 360],
 };
@@ -34,6 +34,7 @@ const OBJECT_ENUMS = {
 	target: ['base', 'lid'],
 	shape: ids(SHAPE_KINDS),
 	head: ids(HOLE_HEADS),
+	holeDepthMode: ids(HOLE_DEPTHS),
 	maskChannel: ['alpha', 'dark', 'light'],
 	face: FACES,
 	align: ['left', 'center', 'right'],

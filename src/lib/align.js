@@ -10,7 +10,7 @@ const UP = new THREE.Vector3(0, 1, 0);
 
 /** World-space bounding box of an object's geometry, or null if it has none. */
 export function objectBounds(object, fonts, settings) {
-	const geometry = createObjectGeometry(object, fonts, settings, 0.5);
+	const geometry = createObjectGeometry(object, fonts, settings, { holeLength: 0.5 });
 	if (!geometry) return null;
 	try {
 		return new THREE.Box3().setFromObject(placeObject(geometry, object, settings), true);

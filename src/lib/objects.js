@@ -1,9 +1,11 @@
+import * as THREE from 'three';
 import { createTextGeometry } from './geometry.js';
 import { getMaskGeometry } from './mask.js';
 import { getSvgGeometry } from './svg.js';
 import { createShapeGeometry } from './shapes2d.js';
 import { objectFont } from './fonts.js';
 import { lidEnabled } from './bodies.js';
+import { quaternionFromRot } from './placement.js';
 import { getEngine, solidToGeometry, withTracking, Z_TO_Y_ARRAY } from './engine.js';
 
 export const OBJECT_MODES = [
@@ -18,6 +20,46 @@ export const HOLE_HEADS = [
 	{ id: 'countersink', label: 'Countersunk' },
 	{ id: 'counterbore', label: 'Counterbored' },
 ];
+
+export const HOLE_DEPTHS = [
+	{ id: 'through', label: 'Through all' },
+	{ id: 'first', label: 'First wall' },
+	{ id: 'fixed', label: 'Fixed depth' },
+];
+
+const PENETRATION = 0.05;
+const PROBE_LIFT = 1;
+
+/**
+ * Depth (mm below the anchor) at which a hole has crossed the first wall of
+ * `bodyMesh`: the deepest point where the shaft's center or rim leaves the
+ * solid, stopping short of any wall beyond. Null if the hole misses the body.
+ */
+export function firstWallDepth(object, bodyMesh) {
+	const quaternion = quaternionFromRot(object.rot);
+	const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion);
+	const across = new THREE.Vector3(1, 0, 0).applyQuaternion(quaternion);
+	const down = new THREE.Vector3(0, 0, 1).applyQuaternion(quaternion);
+	const direction = normal.clone().negate();
+	const anchor = new THREE.Vector3(object.pos.x, object.pos.y, object.pos.z);
+	const radius = Math.max(0.1, (object.holeDiameter ?? 5) / 2) * 0.999;
+	const probes = [[0, 0], ...Array.from({ length: 12 }, (_, k) => [Math.cos((k * Math.PI) / 6) * radius, Math.sin((k * Math.PI) / 6) * radius])];
+	const raycaster = new THREE.Raycaster();
+	let deepest = null;
+	let limit = Infinity;
+	for (const [u, v] of probes) {
+		raycaster.set(anchor.clone().addScaledVector(across, u).addScaledVector(down, v).addScaledVector(normal, PROBE_LIFT), direction);
+		const hits = raycaster.intersectObject(bodyMesh);
+		const leaving = (hit) => hit.face.normal.dot(direction) > 0;
+		const exit = hits.findIndex(leaving);
+		if (exit < 0) continue;
+		deepest = Math.max(deepest ?? -Infinity, hits[exit].distance - PROBE_LIFT);
+		const reentry = hits.slice(exit + 1).find((hit) => !leaving(hit));
+		if (reentry) limit = Math.min(limit, reentry.distance - PROBE_LIFT);
+	}
+	if (deepest === null) return null;
+	return Math.max(PENETRATION, Math.min(deepest + PENETRATION, limit - PENETRATION));
+}
 
 export function effectiveMode(object, settings) {
 	if (object.type === 'hole') return 'hole';
@@ -38,16 +80,16 @@ export function objectLabel(object) {
 }
 
 /**
- * Hole cutter centered on the anchor: a shaft running `length` mm both ways
- * along local Y plus an optional countersink/counterbore opening toward +Y.
+ * Hole cutter on the anchor: a shaft from `length` mm above to `depth` mm
+ * below along local Y, plus an optional countersink/counterbore toward +Y.
  */
-export function createHoleGeometry(object, length) {
+export function createHoleGeometry(object, length, depth = length) {
 	const { Manifold } = getEngine();
 	const radius = Math.max(0.1, (object.holeDiameter ?? 5) / 2);
 	const head = Math.max(radius, (object.headDiameter ?? radius * 4) / 2);
 	const segments = 48;
 	return withTracking((track) => {
-		let solid = track(Manifold.cylinder(2 * length, radius, radius, segments, true));
+		let solid = track(track(Manifold.cylinder(length + depth, radius, radius, segments)).translate([0, 0, -depth]));
 		if (object.head === 'countersink' && head > radius) {
 			const cone = head - radius;
 			solid = track(solid.add(track(track(Manifold.cylinder(cone, radius, head, segments)).translate([0, 0, -cone]))));
@@ -83,16 +125,17 @@ function mirrorGeometry(geometry) {
 }
 
 /**
- * Owned geometry for any object type (caller disposes it). `holeLength`
- * sets how far hole cutters extend; previews pass a short length.
+ * Owned geometry for any object type (caller disposes it). Hole cutters
+ * extend `holeLength` above the anchor and `holeDepth` below it (default:
+ * `holeLength`, i.e. through); previews pass a short length.
  */
-export function createObjectGeometry(object, fonts, settings, holeLength = Math.hypot(settings.width, settings.height, settings.depth) + 20) {
+export function createObjectGeometry(object, fonts, settings, { holeLength = Math.hypot(settings.width, settings.height, settings.depth) + 20, holeDepth } = {}) {
 	let geometry;
 	switch (object.type) {
 		case 'image': geometry = getMaskGeometry(object)?.clone(); break;
 		case 'svg': geometry = getSvgGeometry(object)?.clone(); break;
 		case 'shape': geometry = createShapeGeometry(object); break;
-		case 'hole': return createHoleGeometry(object, holeLength);
+		case 'hole': return createHoleGeometry(object, holeLength, Math.min(holeDepth ?? holeLength, holeLength));
 		default: geometry = createTextGeometry(object.text, objectFont(fonts, object, settings), object);
 	}
 	return geometry && object.mirror ? mirrorGeometry(geometry) : geometry;

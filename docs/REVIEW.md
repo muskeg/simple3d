@@ -102,10 +102,10 @@ Chromium on 2026-09-22. CI is configured for Node.js 22.
 
 | Check | Result |
 | --- | --- |
-| `npm test` | 96 tests passed |
-| `npm run test:e2e` | 24 browser tests passed |
+| `npm test` | 99 tests passed |
+| `npm run test:e2e` | 25 browser tests passed |
 | `npm run build` | Production JS, CSS, worker, local fonts and WASM packaged successfully |
-| `npm run test:production` | All 24 browser tests passed against the static build |
+| `npm run test:production` | All 25 browser tests passed against the static build |
 | Desktop / mobile screenshots | 1440x900 and 390x844; rendered-model pixel coverage and orbit-induced pixel changes asserted |
 | Editor diagnostics | No errors reported |
 
@@ -225,6 +225,7 @@ bases, shell/lid, projects), `2338bb1` (UI, alignment, text), `354c438`
 | Background builds | Module worker with latest-only queue and page fallback | Browser test asserts the worker path is active in dev and production |
 | Arrays | Linear, grid and circular (sweep, rotate copies); per-copy inlay parts; convert to objects | Placement and cap tests; arrayed inlays and holes volume test; browser export and conversion |
 | Deselect on empty click | A click on empty viewport space (not an orbit drag) clears the selection and hides the gizmo | Browser pixel test: gizmo pixels disappear after a click but not after an orbit |
+| Hole depth | Through all, First wall (depth probed from the pre-object body at the shaft center and 12 rim points, stopping before any further wall) or Fixed depth | Exact volumes for one wall of a hollow box, solid-body equivalence and blind holes; a radial hole in a hollow cylinder matches a deliberately deep cut, while a center-line-only depth leaves rim material; browser volume check from STL |
 
 ### Defects Found During The Expansion
 
@@ -245,8 +246,8 @@ bases, shell/lid, projects), `2338bb1` (UI, alignment, text), `354c438`
 
 ### Verification
 
-On 2026-09-22: 96 numerical tests, 24 development browser tests, a production
-build and 24 production browser tests passed. New numerical suites are
+On 2026-09-22: 99 numerical tests, 25 development browser tests, a production
+build and 25 production browser tests passed. New numerical suites are
 `features.test.js`, `ux.test.js` and `arrays.test.js`; `tests/fixtures/font.js`
 generates an OTF at test time instead of committing a binary font. No push,
 remote deployment, slicer import or physical print was performed for these

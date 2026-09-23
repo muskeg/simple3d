@@ -52,7 +52,7 @@ function makeObject(overrides = {}) {
 const OBJECT_DEFAULTS = {
 	text: {},
 	shape: { shape: 'star', text: '', fontSize: 24, shapeHeight: 24, sides: 5, innerRatio: 0.5, cornerRadius: 0 },
-	hole: { text: '', holeDiameter: 5, head: 'none', headDiameter: 10, headDepth: 3 },
+	hole: { text: '', holeDiameter: 5, head: 'none', headDiameter: 10, headDepth: 3, holeDepthMode: 'through', holeDepth: 3 },
 };
 
 // Geometry keys that move faces, so face-snapped objects are re-snapped.
