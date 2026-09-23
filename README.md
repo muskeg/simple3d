@@ -313,7 +313,11 @@ and transform/orbit controls. Bundled fonts retain their upstream license in
 There is no server. Reloading restores the autosaved design. Solid builds run in
 a background Web Worker, so dragging and typing stay responsive while large
 masks, high tessellation, arrays or many objects rebuild; if the worker cannot
-start, builds fall back to the page. WebGL, WebAssembly and module workers are
+start, builds fall back to the page. A status pill in the top-right of the
+viewport shows start-up, file processing (mesh, project and font imports) and
+any rebuild lasting more than a quarter second, with elapsed time after one
+second and a brief "Updated in" confirmation after slow builds. Export stays
+disabled until the shown model matches the current settings. WebGL, WebAssembly and module workers are
 required. Physical
 printing, printer tolerances and third-party slicer compatibility must still be
 checked for the intended printer and materials.

@@ -103,9 +103,9 @@ Chromium on 2026-09-22. CI is configured for Node.js 22.
 | Check | Result |
 | --- | --- |
 | `npm test` | 108 tests passed |
-| `npm run test:e2e` | 26 browser tests passed |
+| `npm run test:e2e` | 27 browser tests passed |
 | `npm run build` | Production JS, CSS, worker, local fonts and WASM packaged successfully |
-| `npm run test:production` | All 26 browser tests passed against the static build |
+| `npm run test:production` | All 27 browser tests passed against the static build |
 | Desktop / mobile screenshots | 1440x900 and 390x844; rendered-model pixel coverage and orbit-induced pixel changes asserted |
 | Editor diagnostics | No errors reported |
 
@@ -140,6 +140,10 @@ are not runtime failures.
   copies, alignment and grid snapping also work in flat planes and can lift off
   curved bases. Free placement can intentionally yield disconnected bodies.
   Inspect connectivity and appropriate manufacturing tolerances in the slicer.
+- Each inset or inlay copy (including array copies) is a separate boolean
+  against the increasingly detailed body, so large arrays rebuild slowly: a
+  10 x 10 inlay array took roughly 25 s in the headless test browser. The worker
+  keeps the UI responsive meanwhile, but there is no cancel or batching yet.
 - Builds run in a module worker. Image masks in the worker need
   `createImageBitmap` and `OffscreenCanvas`; browsers lacking them in workers
   (older Safari) will report a build error for image objects rather than
@@ -232,6 +236,7 @@ bases, shell/lid, projects), `2338bb1` (UI, alignment, text), `354c438`
 | Deselect on empty click | A click on empty viewport space (not an orbit drag) clears the selection and hides the gizmo | Browser pixel test: gizmo pixels disappear after a click but not after an orbit |
 | Hole depth | Through all, First wall (depth probed from the pre-object body at the shaft center and 12 rim points, stopping before any further wall) or Fixed depth | Exact volumes for one wall of a hollow box, solid-body equivalence and blind holes; a radial hole in a hollow cylinder matches a deliberately deep cut, while a center-line-only depth leaves rim material; browser volume check from STL |
 | Custom base meshes and mesh objects (2026-09-23) | STL/OBJ/3MF import with unit and Z-up conversion, vertex merging, inside-out flip, union of overlapping parts and inner-shell cavities; open meshes rejected; real-size import with proportional W/D/H, rotate 90° and original size; mesh objects raised or sunk flush; embedded and validated in projects | Generated binary/ASCII STL and OBJ fixtures with exact sizes and volumes; open, empty, oversized and unsupported files; proportional scaling, rotation and custom-base builds; mesh object volumes per mode; malformed project mesh data; browser import, scale, rotate, an app-exported 3MF round trip and mesh object export |
+| Processing indicator (2026-09-23) | Viewport status pill (accessible progress bar) for engine start-up, mesh/project/font processing and rebuilds over 250 ms, with elapsed time after 1 s and an "Updated in" confirmation; the viewport reports `aria-busy`; page-side imports paint the indicator before blocking work | Browser test delays font loading to observe start-up, then runs a 36-copy inlay array: the indicator shows elapsed time, tabs remain switchable during the worker build, export stays disabled until done, and the confirmation appears |
 
 ### Defects Found During The Expansion
 
@@ -252,8 +257,8 @@ bases, shell/lid, projects), `2338bb1` (UI, alignment, text), `354c438`
 
 ### Verification
 
-On 2026-09-23: 108 numerical tests, 26 development browser tests, a production
-build and 26 production browser tests passed. New numerical suites are
+On 2026-09-23: 108 numerical tests, 27 development browser tests, a production
+build and 27 production browser tests passed. New numerical suites are
 `features.test.js`, `ux.test.js`, `arrays.test.js` and `meshes.test.js`;
 `tests/fixtures/font.js` and `tests/fixtures/meshes.js` generate an OTF and
 STL/OBJ files at test time instead of committing binaries. No push, remote

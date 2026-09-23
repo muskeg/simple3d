@@ -187,7 +187,7 @@ function ObjectsTab({ settings: s, setNumber, setMode, selection, onSelect, addO
 export default function ScenePanel({
 	settings, setNumber, setMode, selection, onSelect, addObject, addImageObject, addSvgObject, addMeshObject, importBaseMesh, rotateBaseMesh, resetBaseMeshSize, duplicateObjects, removeObjects,
 	onNewProject, onSaveProject, onLoadProject, onApplyPreset, onExport3MF, onExportSTL,
-	building, exporting, error, warning, fontError, ready, inspector, undo, redo, canUndo, canRedo, notice, onDismissNotice,
+	exporting, error, warning, fontError, ready, inspector, undo, redo, canUndo, canRedo, notice, onDismissNotice,
 }) {
 	const [tab, setTab] = useState('objects');
 	const [fileError, setFileError] = useState(null);
@@ -222,11 +222,6 @@ export default function ScenePanel({
 					{PRESETS.map((preset) => <MenuItem key={preset.id} Icon={Sparkles} onClick={() => onApplyPreset(preset.id)}>{preset.label}</MenuItem>)}
 				</Menu>
 				<h1 className="text-sm font-semibold tracking-tight">Simple 3D</h1>
-				{building && (
-					<span className="flex items-center gap-1.5 text-[11px] text-neutral-400" title="Building">
-						<span className="h-3 w-3 animate-spin rounded-full border border-neutral-500 border-t-indigo-400" />
-					</span>
-				)}
 				<div className="ml-auto flex gap-1">
 					<IconButton label="Undo (Ctrl+Z)" Icon={Undo2} onClick={undo} disabled={!canUndo} />
 					<IconButton label="Redo (Ctrl+Shift+Z)" Icon={Redo2} onClick={redo} disabled={!canRedo} />
@@ -263,7 +258,7 @@ export default function ScenePanel({
 					</p>
 				)}
 				<div className="relative flex">
-					<button onClick={onExport3MF} disabled={exporting || !ready || uploading} className="flex-1 rounded-l-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-50">
+					<button onClick={onExport3MF} disabled={exporting || !ready || uploading} title={ready ? undefined : 'Available once the model has finished updating'} className="flex-1 rounded-l-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-50">
 						<Download size={14} className="mr-2 inline" />{exporting ? 'Exporting…' : 'Download .3MF'}
 					</button>
 					<button onClick={() => setExportOpen(!exportOpen)} aria-label="More export formats" aria-expanded={exportOpen} className="rounded-r-md border-l border-indigo-800 bg-indigo-600 px-2 text-white hover:bg-indigo-500"><ChevronDown size={14} /></button>

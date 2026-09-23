@@ -11,8 +11,9 @@ import { createObjectGeometry, objectBody } from '../lib/objects.js';
 import { quaternionFromRot, rotFromQuaternion, surfacePlacement } from '../lib/placement.js';
 import { snapToGrid } from '../lib/align.js';
 import { arrayInstances } from '../lib/arrays.js';
+import BuildStatus from './BuildStatus.jsx';
 
-export default function Viewport({ model, onModelRef, settings, fonts, selection, onSelect, onUpdate, prefs, onToggleGridSnap }) {
+export default function Viewport({ model, onModelRef, settings, fonts, selection, onSelect, onUpdate, prefs, onToggleGridSnap, status }) {
 	const selectedId = selection.at(-1) ?? null;
 	const mountRef = useRef(null);
 	const axisRef = useRef(null);
@@ -440,8 +441,9 @@ export default function Viewport({ model, onModelRef, settings, fonts, selection
 	}, [prefs.gridSnap, prefs.gridStep, prefs.angleStep]);
 
 	return (
-		<div className="relative min-h-[240px] min-w-0 flex-1" data-testid="viewport">
+		<div className="relative min-h-[240px] min-w-0 flex-1" data-testid="viewport" aria-busy={status.building || !!status.activity || status.initializing}>
 			<div ref={mountRef} className="absolute inset-0" />
+			<BuildStatus {...status} />
 			<div ref={axisRef} role="group" aria-label="Align view with axis" aria-busy="false" title="Align view with axis" className="absolute bottom-0 right-0 h-32 w-32 cursor-pointer touch-none" />
 			<div className="absolute left-3 top-3 flex gap-1 rounded border border-white/10 bg-neutral-900/95 p-1" role="toolbar" aria-label="Viewport tools">
 				{[{ id: 'translate', Icon: Move3D, label: 'Move (W)' }, { id: 'rotate', Icon: Rotate3D, label: 'Rotate (E)' }].map(({ id, Icon, label }) => (

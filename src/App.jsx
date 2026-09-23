@@ -155,6 +155,14 @@ export default function App() {
 	const builderRef = useRef(null);
 	const autosaveReady = useRef(false);
 	const [notice, setNotice] = useState(null);
+	// Label of page-side processing (imports, project loading) shown by the viewport status pill.
+	const [activity, setActivity] = useState(null);
+	const runTask = useCallback(async (label, task) => {
+		setActivity(label);
+		// Let the indicator paint before synchronous work (mesh validation) blocks the page.
+		await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+		try { return await task(); } finally { setActivity(null); }
+	}, []);
 
 	// Undo history of settings snapshots; bursts of edits to the same fields (typing, scrubbing, dragging) coalesce into one step.
 	const historyRef = useRef({ past: [], future: [], committed: DEFAULT_SETTINGS, timer: 0, seen: DEFAULT_SETTINGS, signature: null });
@@ -296,12 +304,12 @@ export default function App() {
 	const setBase = useCallback((patch) => setSettings((s) => applyBaseChange(s, patch)), []);
 	const setMode = useCallback((mode) => setSettings((s) => ({ ...s, mode })), []);
 
-	const readMesh = async (file) => {
+	const readMesh = (file) => runTask('Importing mesh…', async () => {
 		if (file.size > MAX_MESH_BYTES) throw new Error('Mesh file exceeds the 25 MB limit.');
 		const record = loadMeshFile(file.name, await file.arrayBuffer());
 		if (record.triangleCount > DENSE_MESH_TRIANGLES) setNotice(`${record.name} has ${record.triangleCount.toLocaleString('en-US')} triangles; rebuilds will be slow.`);
 		return record;
-	};
+	});
 
 	const importBaseMesh = useCallback(async (file) => {
 		const record = await readMesh(file);
@@ -440,8 +448,11 @@ export default function App() {
 
 	const addCustomFont = useCallback(async (file, objectId) => {
 		if (file.size > MAX_FONT_BYTES) throw new Error('Font exceeds the 10 MB limit.');
-		const data = bufferToBase64(await file.arrayBuffer());
-		parseFontData(data);
+		const data = await runTask('Reading font…', async () => {
+			const encoded = bufferToBase64(await file.arrayBuffer());
+			parseFontData(encoded);
+			return encoded;
+		});
 		const fonts = settings.customFonts || [];
 		const existing = fonts.find((entry) => entry.data === data);
 		if (!existing && fonts.length >= 8) throw new Error('Projects are limited to 8 uploaded fonts.');
@@ -528,7 +539,7 @@ export default function App() {
 	const onLoadProject = useCallback(async (file) => {
 		if (file.size > MAX_PROJECT_BYTES) throw new Error('Project file is too large.');
 		if (settings !== savedRef.current && !window.confirm('Discard unsaved changes and open this project?')) return;
-		replaceSettings(await loadProjectText(await file.text()));
+		replaceSettings(await runTask('Opening project…', async () => loadProjectText(await file.text())));
 	}, [settings, replaceSettings]);
 
 	const onApplyPreset = useCallback((id) => {
@@ -618,7 +629,6 @@ export default function App() {
 				onApplyPreset={onApplyPreset}
 				onExport3MF={onExport3MF}
 				onExportSTL={onExportSTL}
-				building={building}
 				exporting={exporting}
 				error={error}
 				warning={warning}
@@ -632,7 +642,7 @@ export default function App() {
 				notice={notice}
 				onDismissNotice={() => setNotice(null)}
 			/>
-			<Viewport model={model} onModelRef={onModelRef} settings={settings} fonts={font} selection={selection} onSelect={selectObject} onUpdate={onViewportUpdate} prefs={prefs} onToggleGridSnap={() => setPrefs({ ...prefs, gridSnap: !prefs.gridSnap })} />
+			<Viewport model={model} onModelRef={onModelRef} settings={settings} fonts={font} selection={selection} onSelect={selectObject} onUpdate={onViewportUpdate} prefs={prefs} onToggleGridSnap={() => setPrefs({ ...prefs, gridSnap: !prefs.gridSnap })} status={{ building, activity, initializing: !font && !fontError }} />
 			{isDesktop && <aside aria-label="Inspector" className="panel-scroll w-[300px] shrink-0 overflow-y-auto border-l border-white/10 bg-neutral-900">{inspector}</aside>}
 		</div>
 	);

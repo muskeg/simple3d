@@ -559,6 +559,43 @@ test('custom base meshes and mesh objects import, scale, rotate and export', asy
 	expect((await stl(page)).volume).toBeLessThan(before.volume - 60);
 });
 
+test('processing indicator covers start-up and slow builds without blocking the UI', async ({ page }) => {
+	await page.route('**/fonts/*.json', async (route) => { await new Promise((resolve) => setTimeout(resolve, 1500)); await route.continue(); });
+	await page.reload();
+	const loading = page.getByRole('progressbar', { name: 'Loading geometry engine…', exact: true });
+	await expect(loading).toBeVisible();
+	await expect(loading).toContainText(/\d\.\d s/);
+	await ready(page);
+	await expect(loading).toHaveCount(0);
+	await page.unroute('**/fonts/*.json');
+
+	await page.getByRole('button', { name: 'Flush Inlay', exact: true }).click();
+	await number(page, 'Font Size', 3);
+	await expand(page, 'Array');
+	await page.getByRole('button', { name: 'Grid array', exact: true }).click();
+	await number(page, 'Spacing', 4);
+	await number(page, 'Row Spacing', 2.5);
+	// 6 x 6 inlay copies: enough booleans in the worker to take well over a second.
+	const count = page.getByRole('textbox', { name: 'Count', exact: true });
+	await count.fill('6');
+	await count.press('Enter');
+	const rows = page.getByRole('textbox', { name: 'Rows', exact: true });
+	await rows.fill('6');
+	await rows.press('Enter');
+	const updating = page.getByRole('progressbar', { name: 'Updating model…', exact: true });
+	await expect(updating).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Download .3MF', exact: true })).toBeDisabled();
+	await tab(page, 'Base');
+	await expect(page.getByRole('tab', { name: 'Base', exact: true })).toHaveAttribute('aria-selected', 'true');
+	await expect(updating).toBeVisible();
+	await expect(updating).toContainText(/\d\.\d s/);
+	await expect(page.getByTestId('viewport')).toHaveAttribute('aria-busy', 'true');
+	await expect(page.getByRole('button', { name: 'Download .3MF', exact: true })).toBeEnabled({ timeout: 180000 });
+	await expect(updating).toHaveCount(0);
+	await expect(page.getByText(/^Updated in \d+\.\d s$/)).toBeVisible();
+	await expect(page.getByTestId('viewport')).toHaveAttribute('aria-busy', 'false');
+});
+
 test('presets and project save/load round-trip', async ({ page }) => {
 	page.on('dialog', (dialog) => dialog.accept());
 	await fileMenu(page, 'Box with lid');
