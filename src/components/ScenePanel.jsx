@@ -6,7 +6,8 @@ import { MAX_SVG_BYTES } from '../lib/svg.js';
 import { objectLabel } from '../lib/objects.js';
 import { lidEnabled, shellEnabled } from '../lib/bodies.js';
 import { PRESETS } from '../lib/presets.js';
-import { Copy, Trash2, Image, Type, Download, Shapes, CircleDot, FileCode, Save, FolderOpen, ChevronDown, FilePlus, Box, Cylinder, Circle, Cone, Pyramid, Hexagon, Disc, Donut, Menu as MenuIcon, Sparkles, Undo2, Redo2, X } from 'lucide-react';
+import { MESH_ACCEPT } from '../lib/meshImport.js';
+import { Copy, Trash2, Image, Type, Download, Shapes, CircleDot, FileCode, Save, FolderOpen, ChevronDown, FilePlus, Box, Cylinder, Circle, Cone, Pyramid, Hexagon, Disc, Donut, Menu as MenuIcon, Sparkles, Undo2, Redo2, X, Package } from 'lucide-react';
 
 export const MODES = [
 	{ id: 'raised', label: 'Raised' },
@@ -14,7 +15,7 @@ export const MODES = [
 	{ id: 'flush_inlay', label: 'Flush Inlay' },
 ];
 
-const SHAPE_ICONS = { box: Box, cylinder: Cylinder, sphere: Circle, cone: Cone, pyramid: Pyramid, ngon: Hexagon, tube: Disc, torus: Donut };
+const SHAPE_ICONS = { box: Box, cylinder: Cylinder, sphere: Circle, cone: Cone, pyramid: Pyramid, ngon: Hexagon, tube: Disc, torus: Donut, custom: Package };
 
 const ADD_BUTTONS = [
 	{ type: 'text', label: 'Text', aria: 'Add Text Object', Icon: Type },
@@ -22,9 +23,10 @@ const ADD_BUTTONS = [
 	{ type: 'svg', label: 'SVG', aria: 'Add SVG', Icon: FileCode },
 	{ type: 'shape', label: 'Shape', aria: 'Add Shape', Icon: Shapes },
 	{ type: 'hole', label: 'Hole', aria: 'Add Hole', Icon: CircleDot },
+	{ type: 'mesh', label: 'Mesh', aria: 'Add Mesh Object', Icon: Package },
 ];
 
-export const TYPE_ICONS = { text: Type, image: Image, svg: FileCode, shape: Shapes, hole: CircleDot };
+export const TYPE_ICONS = { text: Type, image: Image, svg: FileCode, shape: Shapes, hole: CircleDot, mesh: Package };
 
 function readFileAsDataURL(file) {
 	return new Promise((resolve, reject) => {
@@ -49,13 +51,39 @@ export async function readSvgFile(file) {
 	return file.text();
 }
 
-function BaseTab({ settings: s, setNumber }) {
+function BaseTab({ settings: s, setNumber, rotateBaseMesh, resetBaseMeshSize }) {
 	const isFilleted = s.chamfer > 0 && s.chamferSegments > 1;
 	const hasLid = lidEnabled(s);
+	const pickBaseMesh = () => document.getElementById('base-mesh-input')?.click();
+	const segmented = !['box', 'ngon', 'custom'].includes(s.baseShape);
 	return (
 		<>
 			<Section id="base-shape" title="Base">
-				<Segmented label="Base shape" value={s.baseShape} columns={4} onChange={(id) => setNumber('baseShape')(id)} options={BASE_SHAPES.map((shape) => ({ ...shape, Icon: SHAPE_ICONS[shape.id] }))} />
+				<Segmented
+					label="Base shape"
+					value={s.baseShape}
+					columns={5}
+					onChange={(id) => (id === 'custom' && !s.customMesh ? pickBaseMesh() : setNumber('baseShape')(id))}
+					options={[...BASE_SHAPES, { id: 'custom', label: 'Custom' }].map((shape) => ({ ...shape, Icon: SHAPE_ICONS[shape.id] }))}
+				/>
+				{s.baseShape === 'custom' && s.customMesh && (
+					<div className="space-y-2 rounded-md border border-white/5 bg-neutral-950/30 p-2">
+						<div className="flex items-center gap-1.5 text-xs text-neutral-300">
+							<Package size={13} className="shrink-0 text-indigo-300" />
+							<span className="min-w-0 flex-1 truncate" title={s.customMesh.name}>{s.customMesh.name}</span>
+							<span className="shrink-0 text-[10px] text-neutral-500">{s.customMesh.triangleCount.toLocaleString('en-US')} tris</span>
+						</div>
+						<div className="flex items-center gap-1">
+							<button onClick={pickBaseMesh} className="rounded-md border border-neutral-600 bg-neutral-800 px-2 py-1 text-xs text-neutral-200 hover:border-indigo-500">Replace…</button>
+							<span className="ml-auto text-[10px] text-neutral-500">Rotate 90°</span>
+							{['x', 'y', 'z'].map((axis) => <button key={axis} onClick={() => rotateBaseMesh(axis)} aria-label={`Rotate mesh 90° about ${axis.toUpperCase()}`} title={`Rotate 90° about ${axis.toUpperCase()}`} className="h-7 w-7 rounded-md border border-neutral-700/70 bg-neutral-800/40 text-[11px] text-neutral-300 hover:border-neutral-500">{axis.toUpperCase()}</button>)}
+						</div>
+						<div className="flex items-center justify-between">
+							<Checkbox label="Keep proportions" checked={s.meshLock !== false} onChange={(v) => setNumber('meshLock')(v)} />
+							<button onClick={resetBaseMeshSize} className="text-[11px] text-indigo-300 hover:text-indigo-100">Original size</button>
+						</div>
+					</div>
+				)}
 				<div className="grid grid-cols-3 gap-1.5">
 					<NumberField stacked label="Width" value={s.width} min={0.1} max={800} step={1} suffix=" mm" onChange={(v) => setNumber('width')(v)} />
 					<NumberField stacked label="Depth" value={s.depth} min={0.1} max={800} step={1} suffix=" mm" onChange={(v) => setNumber('depth')(v)} />
@@ -70,10 +98,10 @@ function BaseTab({ settings: s, setNumber }) {
 						<Checkbox label="Use rounded fillet (more segments)" checked={s.chamferSegments > 1} onChange={(v) => setNumber('chamferSegments')(v ? 4 : 1)} />
 					</>
 				)}
-				{(isFilleted || !['box', 'ngon'].includes(s.baseShape)) && (
+				{(isFilleted || segmented) && (
 					<Group id="base-advanced" title="Advanced">
 						{isFilleted && <NumberField label="Fillet Segments" value={s.chamferSegments} min={1} max={16} hardMax={16} step={1} onChange={(v) => setNumber('chamferSegments')(Math.round(v))} />}
-						{!['box', 'ngon'].includes(s.baseShape) && <NumberField label="Surface Segments" value={s.radialSegments} min={8} max={128} hardMax={128} step={1} onChange={(v) => setNumber('radialSegments')(Math.round(v))} />}
+						{segmented && <NumberField label="Surface Segments" value={s.radialSegments} min={8} max={128} hardMax={128} step={1} onChange={(v) => setNumber('radialSegments')(Math.round(v))} />}
 					</Group>
 				)}
 			</Section>
@@ -109,6 +137,7 @@ function ObjectsTab({ settings: s, setNumber, setMode, selection, onSelect, addO
 	const onAdd = (type) => {
 		if (type === 'image') document.getElementById('mask-file-input')?.click();
 		else if (type === 'svg') document.getElementById('svg-file-input')?.click();
+		else if (type === 'mesh') document.getElementById('mesh-object-input')?.click();
 		else addObject(type);
 	};
 	return (
@@ -118,7 +147,7 @@ function ObjectsTab({ settings: s, setNumber, setMode, selection, onSelect, addO
 				{s.mode === 'inset' && <NumberField label="Inset Depth" value={s.insetDepth} min={0.1} max={100} step={0.25} suffix=" mm" onChange={(v) => setNumber('insetDepth')(v)} />}
 			</Section>
 			<Section id="objects-list" title={`Objects (${s.objects.length})`}>
-				<div className="grid grid-cols-5 gap-1">
+				<div className="grid grid-cols-6 gap-1">
 					{ADD_BUTTONS.map(({ type, label, aria, Icon }) => (
 						<button key={type} onClick={() => onAdd(type)} disabled={type === 'image' && uploading} aria-label={aria} title={aria} className="flex flex-col items-center gap-0.5 rounded-md border border-dashed border-neutral-600 px-1 py-1.5 text-[10px] font-medium text-neutral-300 transition hover:border-indigo-500 hover:text-indigo-200 disabled:opacity-40">
 							<Icon size={14} />{type === 'image' && uploading ? '…' : label}
@@ -156,7 +185,7 @@ function ObjectsTab({ settings: s, setNumber, setMode, selection, onSelect, addO
 }
 
 export default function ScenePanel({
-	settings, setNumber, setMode, selection, onSelect, addObject, addImageObject, addSvgObject, duplicateObjects, removeObjects,
+	settings, setNumber, setMode, selection, onSelect, addObject, addImageObject, addSvgObject, addMeshObject, importBaseMesh, rotateBaseMesh, resetBaseMeshSize, duplicateObjects, removeObjects,
 	onNewProject, onSaveProject, onLoadProject, onApplyPreset, onExport3MF, onExportSTL,
 	building, exporting, error, warning, fontError, ready, inspector, undo, redo, canUndo, canRedo, notice, onDismissNotice,
 }) {
@@ -212,7 +241,7 @@ export default function ScenePanel({
 			</div>
 
 			<div className="panel-scroll flex-1 overflow-y-auto" role="tabpanel">
-				{tab === 'base' && <BaseTab settings={settings} setNumber={setNumber} />}
+				{tab === 'base' && <BaseTab settings={settings} setNumber={setNumber} rotateBaseMesh={rotateBaseMesh} resetBaseMeshSize={resetBaseMeshSize} />}
 				{tab === 'objects' && <ObjectsTab settings={settings} setNumber={setNumber} setMode={setMode} selection={selection} onSelect={onSelect} addObject={addObject} duplicateObjects={duplicateObjects} removeObjects={removeObjects} uploading={uploading} />}
 				{tab === 'edit' && inspector}
 			</div>
@@ -220,6 +249,8 @@ export default function ScenePanel({
 			<input id="mask-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ''; if (file) guard(async () => addImageObject(await readImageFile(file))); }} />
 			<input id="svg-file-input" type="file" accept=".svg,image/svg+xml" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ''; if (file) guard(async () => addSvgObject(await readSvgFile(file))); }} />
 			<input id="project-file-input" type="file" accept=".json,application/json" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ''; if (file) guard(() => onLoadProject(file)); }} />
+			<input id="base-mesh-input" type="file" accept={MESH_ACCEPT} className="hidden" onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ''; if (file) guard(() => importBaseMesh(file)); }} />
+			<input id="mesh-object-input" type="file" accept={MESH_ACCEPT} className="hidden" onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ''; if (file) guard(() => addMeshObject(file)); }} />
 
 			<footer className="space-y-2 border-t border-white/10 px-3 py-2.5">
 				{(error || fileError) && <p role="alert" className="rounded bg-red-500/15 px-2 py-1 text-[11px] text-red-300">{error || fileError}</p>}

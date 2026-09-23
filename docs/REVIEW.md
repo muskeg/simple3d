@@ -102,10 +102,10 @@ Chromium on 2026-09-22. CI is configured for Node.js 22.
 
 | Check | Result |
 | --- | --- |
-| `npm test` | 99 tests passed |
-| `npm run test:e2e` | 25 browser tests passed |
+| `npm test` | 108 tests passed |
+| `npm run test:e2e` | 26 browser tests passed |
 | `npm run build` | Production JS, CSS, worker, local fonts and WASM packaged successfully |
-| `npm run test:production` | All 25 browser tests passed against the static build |
+| `npm run test:production` | All 26 browser tests passed against the static build |
 | Desktop / mobile screenshots | 1440x900 and 390x844; rendered-model pixel coverage and orbit-induced pixel changes asserted |
 | Editor diagnostics | No errors reported |
 
@@ -152,6 +152,11 @@ are not runtime failures.
   is in memory only and does not survive a reload.
 - Uploaded fonts are parsed by Three.js's bundled opentype.js. Kerning is not
   applied, and glyph coverage depends on the font.
+- Imported meshes must already be closed solids; there is no automatic repair.
+  STL and OBJ carry no units and are assumed to be millimeters; STL/3MF are
+  assumed Z-up and OBJ Y-up. Real-world exports from CAD tools, slicers and
+  sculpting apps have not been tested beyond generated fixtures and this app's
+  own 3MF output.
 - Curved text, heightmap relief, print checks and additional export formats are
   not delivered features.
 
@@ -226,6 +231,7 @@ bases, shell/lid, projects), `2338bb1` (UI, alignment, text), `354c438`
 | Arrays | Linear, grid and circular (sweep, rotate copies); per-copy inlay parts; convert to objects | Placement and cap tests; arrayed inlays and holes volume test; browser export and conversion |
 | Deselect on empty click | A click on empty viewport space (not an orbit drag) clears the selection and hides the gizmo | Browser pixel test: gizmo pixels disappear after a click but not after an orbit |
 | Hole depth | Through all, First wall (depth probed from the pre-object body at the shaft center and 12 rim points, stopping before any further wall) or Fixed depth | Exact volumes for one wall of a hollow box, solid-body equivalence and blind holes; a radial hole in a hollow cylinder matches a deliberately deep cut, while a center-line-only depth leaves rim material; browser volume check from STL |
+| Custom base meshes and mesh objects (2026-09-23) | STL/OBJ/3MF import with unit and Z-up conversion, vertex merging, inside-out flip, union of overlapping parts and inner-shell cavities; open meshes rejected; real-size import with proportional W/D/H, rotate 90° and original size; mesh objects raised or sunk flush; embedded and validated in projects | Generated binary/ASCII STL and OBJ fixtures with exact sizes and volumes; open, empty, oversized and unsupported files; proportional scaling, rotation and custom-base builds; mesh object volumes per mode; malformed project mesh data; browser import, scale, rotate, an app-exported 3MF round trip and mesh object export |
 
 ### Defects Found During The Expansion
 
@@ -246,9 +252,9 @@ bases, shell/lid, projects), `2338bb1` (UI, alignment, text), `354c438`
 
 ### Verification
 
-On 2026-09-22: 99 numerical tests, 25 development browser tests, a production
-build and 25 production browser tests passed. New numerical suites are
-`features.test.js`, `ux.test.js` and `arrays.test.js`; `tests/fixtures/font.js`
-generates an OTF at test time instead of committing a binary font. No push,
-remote deployment, slicer import or physical print was performed for these
-changes.
+On 2026-09-23: 108 numerical tests, 26 development browser tests, a production
+build and 26 production browser tests passed. New numerical suites are
+`features.test.js`, `ux.test.js`, `arrays.test.js` and `meshes.test.js`;
+`tests/fixtures/font.js` and `tests/fixtures/meshes.js` generate an OTF and
+STL/OBJ files at test time instead of committing binaries. No push, remote
+deployment, slicer import or physical print was performed for these changes.

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { createBaseGeometry as createBoxGeometry, roundedRectShape } from './geometry.js';
+import { decodeMesh } from './meshData.js';
 
 /**
  * Base shape library.
@@ -166,6 +167,10 @@ function createRawGeometry(settings) {
 			geom.rotateX(-Math.PI / 2);
 			return geom;
 		}
+
+		case 'custom':
+			if (settings.customMesh) return decodeMesh(settings.customMesh).clone();
+			return createBoxGeometry(settings);
 
 		case 'box':
 		default:

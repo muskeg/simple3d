@@ -3,6 +3,7 @@ import { PNG } from 'pngjs';
 import { readFile } from 'node:fs/promises';
 import JSZip from 'jszip';
 import { makeTestFont } from '../fixtures/font.js';
+import { binarySTL, boxTriangles } from '../fixtures/meshes.js';
 
 async function ready(page) {
 	await expect(page.getByRole('button', { name: 'Download .3MF', exact: true })).toBeEnabled();
@@ -499,6 +500,63 @@ test('hole depth: through all, first wall only, or a blind depth', async ({ page
 	await expect(page.getByRole('textbox', { name: 'Blind Depth', exact: true })).toHaveValue('3');
 	await number(page, 'Blind Depth', 1);
 	expect((await stl(page)).volume - first.volume).toBeGreaterThan(25);
+});
+
+test('custom base meshes and mesh objects import, scale, rotate and export', async ({ page }) => {
+	const stlFile = (name, min, max) => ({ name, mimeType: 'model/stl', buffer: Buffer.from(binarySTL(boxTriangles(min, max))) });
+	await page.getByRole('button', { name: 'Delete ABC', exact: true }).click();
+	await tab(page, 'Base');
+	const dims = async () => Promise.all(['Width', 'Depth', 'Height'].map((name) => page.getByRole('textbox', { name, exact: true }).inputValue()));
+	await page.locator('#base-mesh-input').setInputFiles(stlFile('bracket.stl', [0, 0, 0], [20, 10, 30]));
+	await ready(page);
+	await expect(page.getByRole('button', { name: 'Custom', exact: true })).toHaveAttribute('aria-pressed', 'true');
+	await expect(page.getByText('bracket.stl', { exact: true })).toBeVisible();
+	expect(await dims()).toEqual(['20', '10', '30']);
+	await expect(page.getByRole('checkbox', { name: 'Hollow shell', exact: true })).toHaveCount(0);
+	let exported = await stl(page);
+	expect(exported.size[0]).toBeCloseTo(20, 3);
+	expect(exported.size[1]).toBeCloseTo(10, 3);
+
+	await number(page, 'Width', 40);
+	expect(await dims()).toEqual(['40', '20', '60']);
+	await page.getByRole('checkbox', { name: 'Keep proportions', exact: true }).uncheck();
+	await number(page, 'Width', 50);
+	expect(await dims()).toEqual(['50', '20', '60']);
+	await page.getByRole('button', { name: 'Original size', exact: true }).click();
+	await ready(page);
+	expect(await dims()).toEqual(['20', '10', '30']);
+	await page.getByRole('button', { name: 'Rotate mesh 90° about X', exact: true }).click();
+	await ready(page);
+	expect(await dims()).toEqual(['20', '30', '10']);
+	exported = await stl(page);
+	expect(exported.size[1]).toBeCloseTo(30, 3);
+	expect(exported.size[2]).toBeCloseTo(10, 3);
+
+	// A 3MF exported by this app imports back as one closed base of the same footprint.
+	const pending = page.waitForEvent('download');
+	await page.getByRole('button', { name: 'Download .3MF', exact: true }).click();
+	const threeMF = await readFile(await (await pending).path());
+	await page.locator('#base-mesh-input').setInputFiles({ name: 'roundtrip.3mf', mimeType: 'model/3mf', buffer: threeMF });
+	await ready(page);
+	await expect(page.getByText('roundtrip.3mf', { exact: true })).toBeVisible();
+	expect((await dims())[0]).toBe('20');
+
+	await page.locator('#base-mesh-input').setInputFiles({ name: 'open.stl', mimeType: 'model/stl', buffer: Buffer.from(binarySTL(boxTriangles([0, 0, 0], [5, 5, 5]).slice(1))) });
+	await expect(page.getByRole('alert')).toContainText('not a closed solid');
+	await expect(page.getByText('roundtrip.3mf', { exact: true })).toBeVisible();
+
+	await tab(page, 'Objects');
+	const before = await stl(page);
+	await page.locator('#mesh-object-input').setInputFiles(stlFile('peg.stl', [0, 0, 0], [4, 4, 4]));
+	await expect(page.getByRole('button', { name: 'Select peg.stl', exact: true })).toBeVisible();
+	await expect(page.getByRole('textbox', { name: 'Mesh Width', exact: true })).toHaveValue('4');
+	await expect(page.getByRole('textbox', { name: 'Extrusion Height', exact: true })).toHaveCount(0);
+	await ready(page);
+	const raised = await stl(page);
+	expect(raised.volume - before.volume).toBeGreaterThan(60);
+	await page.getByRole('combobox', { name: 'Object Mode', exact: true }).selectOption('inset');
+	await ready(page);
+	expect((await stl(page)).volume).toBeLessThan(before.volume - 60);
 });
 
 test('presets and project save/load round-trip', async ({ page }) => {

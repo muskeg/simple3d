@@ -9,6 +9,7 @@ import { OBJECT_MODES, HOLE_HEADS, HOLE_DEPTHS, effectiveMode, objectLabel } fro
 import { lidEnabled } from '../lib/bodies.js';
 import { MAX_TEXT_LENGTH } from '../lib/project.js';
 import { ARRAY_KINDS, MAX_ARRAY_INSTANCES } from '../lib/arrays.js';
+import { MESH_ACCEPT } from '../lib/meshImport.js';
 import { Copy, Trash2, Upload, Circle, RectangleHorizontal, Star, Heart, Hexagon, ArrowRight, AlignStartVertical, AlignCenterVertical, AlignEndVertical, AlignHorizontalDistributeCenter, MoveHorizontal, MoveVertical, Crosshair, Type, Minus, Columns3, LayoutGrid, RotateCw } from 'lucide-react';
 
 const ARRAY_ICONS = { none: Minus, linear: Columns3, grid: LayoutGrid, circular: RotateCw };
@@ -55,7 +56,7 @@ function SelectionTools({ objects, onAlign, onDistribute, duplicateObjects, remo
 }
 
 export default function Inspector({
-	settings: s, selection, updateObject, duplicateObjects, removeObjects, snapToFace, setObjectTarget, setObjectImage, setObjectSvg,
+	settings: s, selection, updateObject, duplicateObjects, removeObjects, snapToFace, setObjectTarget, setObjectImage, setObjectSvg, setObjectMesh,
 	addCustomFont, onAlign, onDistribute, onCenterOnFace, onCenterOnBody, explodeArray, prefs, setPrefs, className = '',
 }) {
 	const objects = selection.map((id) => s.objects.find((object) => object.id === id)).filter(Boolean);
@@ -150,6 +151,13 @@ export default function Inspector({
 					</div>
 				)}
 
+				{selected.type === 'mesh' && selected.mesh && (
+					<div className="flex items-center gap-2">
+						<span className="min-w-0 flex-1 truncate text-xs text-neutral-400" title={selected.mesh.name}>{selected.mesh.triangleCount.toLocaleString('en-US')} triangles</span>
+						<FileButton id={`replace-mesh-${selected.id}`} label="Replace Mesh…" accept={MESH_ACCEPT} onFile={(file) => guard(() => setObjectMesh(selected.id, file))} />
+					</div>
+				)}
+
 				{selected.type === 'shape' && (
 					<>
 						<Segmented label="Shape Kind" value={selected.shape || 'circle'} columns={6} iconOnly onChange={(shape) => update({ shape })} options={SHAPE_KINDS.map((kind) => ({ ...kind, Icon: SHAPE_ICONS[kind.id] }))} />
@@ -177,10 +185,16 @@ export default function Inspector({
 					</>
 				) : (
 					<>
-						{selected.type !== 'shape' && <NumberField label={{ image: 'Mask Width', svg: 'SVG Width' }[selected.type] || 'Font Size'} value={selected.fontSize} min={1} max={300} step={0.5} suffix=" mm" onChange={(v) => update({ fontSize: v })} />}
-						{mode === 'flush_inlay' && <NumberField label="Inlay Depth" value={selected.inlayDepth ?? 2} min={0.1} max={100} step={0.25} suffix=" mm" onChange={(v) => update({ inlayDepth: v })} />}
-						{mode === 'inset' && <NumberField label="Object Inset Depth" value={selected.insetDepth ?? s.insetDepth} min={0.1} max={100} step={0.25} suffix=" mm" onChange={(v) => update({ insetDepth: v })} />}
-						{mode === 'raised' && <NumberField label="Extrusion Height" value={selected.extrudeHeight} min={0.1} max={200} step={0.25} suffix=" mm" onChange={(v) => update({ extrudeHeight: v })} />}
+						{selected.type !== 'shape' && <NumberField label={{ image: 'Mask Width', svg: 'SVG Width', mesh: 'Mesh Width' }[selected.type] || 'Font Size'} value={selected.fontSize} min={1} max={300} step={0.5} suffix=" mm" onChange={(v) => update({ fontSize: v })} />}
+						{selected.type === 'mesh' ? (
+							<p className="text-[11px] leading-relaxed text-neutral-500">Scaled uniformly by width. Raised meshes sit on the surface; inset and inlay meshes sink until their top is flush, so the cut is as deep as the mesh is tall.</p>
+						) : (
+							<>
+								{mode === 'flush_inlay' && <NumberField label="Inlay Depth" value={selected.inlayDepth ?? 2} min={0.1} max={100} step={0.25} suffix=" mm" onChange={(v) => update({ inlayDepth: v })} />}
+								{mode === 'inset' && <NumberField label="Object Inset Depth" value={selected.insetDepth ?? s.insetDepth} min={0.1} max={100} step={0.25} suffix=" mm" onChange={(v) => update({ insetDepth: v })} />}
+								{mode === 'raised' && <NumberField label="Extrusion Height" value={selected.extrudeHeight} min={0.1} max={200} step={0.25} suffix=" mm" onChange={(v) => update({ extrudeHeight: v })} />}
+							</>
+						)}
 						<Checkbox label="Mirror (for stamps)" checked={selected.mirror} onChange={(mirror) => update({ mirror })} />
 					</>
 				)}

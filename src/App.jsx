@@ -12,7 +12,10 @@ import { rotationPresetForFace, facePositionPreset, facePlacementPreset } from '
 import { preloadMaskImage } from './lib/mask.js';
 import { validateSvg } from './lib/svg.js';
 import { effectiveMode, objectBody } from './lib/objects.js';
-import { lidOrigin, shellEnabled, shellWall } from './lib/bodies.js';
+import { shellEnabled, shellWall } from './lib/bodies.js';
+import { applyBaseChange } from './lib/baseSettings.js';
+import { loadMeshFile, MAX_MESH_BYTES, DENSE_MESH_TRIANGLES } from './lib/meshImport.js';
+import { decodeMesh, rotateMesh } from './lib/meshData.js';
 import { FONTS, MAX_FONT_BYTES, bufferToBase64, parseFontData } from './lib/fonts.js';
 import { parseProject, serializeProject, MAX_PROJECT_BYTES } from './lib/project.js';
 import { PRESETS, presetSettings } from './lib/presets.js';
@@ -55,9 +58,6 @@ const OBJECT_DEFAULTS = {
 	hole: { text: '', holeDiameter: 5, head: 'none', headDiameter: 10, headDepth: 3, holeDepthMode: 'through', holeDepth: 3 },
 };
 
-// Geometry keys that move faces, so face-snapped objects are re-snapped.
-const RESNAP_KEYS = ['baseShape', 'sides', 'tubeWall', 'shell', 'wall', 'openTop', 'lid', 'lidThickness', 'lipDepth'];
-
 const DEFAULT_SETTINGS = {
 	// Base plate
 	baseShape: 'box', // see BASE_SHAPES
@@ -70,6 +70,8 @@ const DEFAULT_SETTINGS = {
 	radialSegments: 64, // tessellation for cylinder/sphere/cone
 	sides: 6,
 	tubeWall: 3,
+	customMesh: null, // imported base mesh record (see lib/meshData.js)
+	meshLock: true, // custom mesh keeps proportions when one dimension changes
 	// Hollow shell + lid (box, cylinder, n-gon)
 	shell: false,
 	wall: 2,
@@ -110,7 +112,9 @@ async function loadProjectText(text) {
 	for (const object of settings.objects) {
 		if (object.type === 'image') await preloadMaskImage(object.image);
 		if (object.type === 'svg') validateSvg(object.svg);
+		if (object.type === 'mesh') decodeMesh(object.mesh);
 	}
+	if (settings.customMesh) decodeMesh(settings.customMesh);
 	for (const entry of settings.customFonts || []) parseFontData(entry.data);
 	objectIdCounter = Math.max(objectIdCounter, maxId);
 	return settings;
@@ -288,32 +292,33 @@ export default function App() {
 		return () => clearTimeout(timer);
 	}, [settings, font]);
 
-	const setNumber = useCallback(
-		(key) => (v) => {
-			setSettings((s) => {
-				const next = { ...s, [key]: v };
-				next.cornerRadius = Math.min(next.cornerRadius, Math.min(next.width, next.depth) / 2);
-				next.chamfer = Math.min(next.chamfer, Math.min(next.width, next.depth, next.height) * 0.45);
-				if (shellEnabled(next)) next.chamfer = Math.min(next.chamfer, shellWall(next) * 0.5);
-				const resnap = RESNAP_KEYS.includes(key);
-				if (resnap || ['width', 'height', 'depth'].includes(key)) {
-					next.objects = s.objects.map((object) => {
-						const target = object.target === 'lid' ? 'lid' : 'base';
-						if (target === 'lid' && !objectBody(object, next)) return object;
-						if (object.face !== 'auto' && (resnap || target === 'lid')) return { ...object, ...facePlacementPreset(object.face, next, target) };
-						if (resnap) return object;
-						const sx = next.width / s.width, sz = next.depth / s.depth;
-						if (target === 'lid') return { ...object, pos: { x: object.pos.x * sx, y: object.pos.y + lidOrigin(next) - lidOrigin(s), z: object.pos.z * sz } };
-						if (object.face === 'auto') return object;
-						return { ...object, pos: { x: object.pos.x * sx, y: object.pos.y * next.height / s.height, z: object.pos.z * sz }, rot: facePlacementPreset(object.face, next).rot };
-					});
-				}
-				return next;
-			});
-		},
-		[],
-	);
+	const setNumber = useCallback((key) => (v) => setSettings((s) => applyBaseChange(s, { [key]: v })), []);
+	const setBase = useCallback((patch) => setSettings((s) => applyBaseChange(s, patch)), []);
 	const setMode = useCallback((mode) => setSettings((s) => ({ ...s, mode })), []);
+
+	const readMesh = async (file) => {
+		if (file.size > MAX_MESH_BYTES) throw new Error('Mesh file exceeds the 25 MB limit.');
+		const record = loadMeshFile(file.name, await file.arrayBuffer());
+		if (record.triangleCount > DENSE_MESH_TRIANGLES) setNotice(`${record.name} has ${record.triangleCount.toLocaleString('en-US')} triangles; rebuilds will be slow.`);
+		return record;
+	};
+
+	const importBaseMesh = useCallback(async (file) => {
+		const record = await readMesh(file);
+		setBase({ baseShape: 'custom', customMesh: record, width: record.size.x, height: record.size.y, depth: record.size.z });
+	}, [setBase]);
+
+	const rotateBaseMesh = useCallback((axis) => {
+		const record = rotateMesh(settings.customMesh, axis);
+		const { width: w, height: h, depth: d } = settings;
+		const dims = axis === 'x' ? { width: w, height: d, depth: h } : axis === 'y' ? { width: d, height: h, depth: w } : { width: h, height: w, depth: d };
+		setBase({ customMesh: record, ...dims });
+	}, [settings, setBase]);
+
+	const resetBaseMeshSize = useCallback(() => {
+		const { size } = settings.customMesh;
+		setBase({ width: size.x, height: size.y, depth: size.z });
+	}, [settings.customMesh, setBase]);
 
 	const updateObject = useCallback((id, patch) => {
 		setSettings((s) => ({
@@ -368,6 +373,18 @@ export default function App() {
 	const setObjectImage = useCallback(async (id, dataURL) => {
 		await preloadMaskImage(dataURL);
 		updateObject(id, { image: dataURL });
+	}, [updateObject]);
+
+	const addMeshObject = useCallback(async (file) => {
+		const record = await readMesh(file);
+		const obj = makeObject({ type: 'mesh', mesh: record, text: '', fontSize: Number(record.size.x.toFixed(3)), ...facePlacementPreset('top', settingsRef.current) });
+		setSettings((s) => ({ ...s, objects: [...s.objects, obj] }));
+		setSelectedId(obj.id);
+	}, [setSelectedId]);
+
+	const setObjectMesh = useCallback(async (id, file) => {
+		const record = await readMesh(file);
+		updateObject(id, { mesh: record, fontSize: Number(record.size.x.toFixed(3)) });
 	}, [updateObject]);
 
 	const duplicateObjects = useCallback((ids) => {
@@ -565,6 +582,7 @@ export default function App() {
 			setObjectTarget={setObjectTarget}
 			setObjectImage={setObjectImage}
 			setObjectSvg={setObjectSvg}
+			setObjectMesh={setObjectMesh}
 			addCustomFont={addCustomFont}
 			onAlign={onAlign}
 			onDistribute={onDistribute}
@@ -588,6 +606,10 @@ export default function App() {
 				addObject={addObject}
 				addImageObject={addImageObject}
 				addSvgObject={addSvgObject}
+				addMeshObject={addMeshObject}
+				importBaseMesh={importBaseMesh}
+				rotateBaseMesh={rotateBaseMesh}
+				resetBaseMeshSize={resetBaseMeshSize}
 				duplicateObjects={duplicateObjects}
 				removeObjects={removeObjects}
 				onNewProject={onNewProject}

@@ -70,6 +70,27 @@ notice, and File > Save project still works.
 	arithmetic, not exact rational arithmetic.
 - Surface/curve segment counts and mask resolution have hard complexity limits.
 
+### Custom Base Meshes
+
+Choose **Custom** in the base shapes to import an STL (binary or ASCII), OBJ
+or 3MF file (up to 25 MB and 500,000 triangles) as the base. STL and 3MF are
+treated as Z-up print files and converted to the editor's Y-up; OBJ is taken as
+Y-up. 3MF units are converted to millimeters; STL and OBJ are assumed to be in
+millimeters. On import, duplicate vertices are merged, an inside-out mesh is
+flipped, overlapping parts are unioned into one solid and inward-facing inner
+shells become cavities. Meshes with holes, open edges or non-manifold geometry
+are rejected with a message; repair them first (for example in your slicer or
+Meshmixer). Meshes above 200,000 triangles import with a notice that rebuilds
+will be slow.
+
+The mesh imports at its real size. Width, Depth and Height scale it; **Keep
+proportions** (on by default) scales the other two dimensions with the one you
+edit, **Original size** restores the file's size and **Rotate 90° X/Y/Z** fixes
+files exported lying on their side. Face snapping, dragging, holes (including
+First wall), arrays and inlays work on the imported surface. Hollow shells, lids,
+chamfers and corner radii are not available for custom bases. The mesh is
+embedded in project files and autosave; large meshes may exceed browser storage.
+
 ### Shell And Lid
 
 Box, cylinder and N-gon bases can be hollowed with a uniform **Wall Thickness**
@@ -103,6 +124,10 @@ a valid base-only model. Empty text adds no geometry.
 	body this is the same as through) or **Fixed depth** (a blind hole of Blind
 	Depth mm). First wall probes the shaft's center and rim, so curved walls are
 	cleared fully without reaching the next wall.
+- **Mesh** objects import an STL, OBJ or 3MF (same validation as custom bases)
+	and combine it with the body using the object's mode. **Mesh Width** scales it
+	uniformly. Raised meshes sit on the surface; inset and flush-inlay meshes sink
+	until their top is flush, so the cut is as deep as the mesh is tall.
 - **SVG** files (up to 2 MB) use their filled paths; overlapping paths are
 	unioned. SVG Width sets the outline width. SVGs are parsed as XML only and
 	never inserted into the page.

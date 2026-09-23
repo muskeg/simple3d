@@ -3,6 +3,7 @@ import { createTextGeometry } from './geometry.js';
 import { getMaskGeometry } from './mask.js';
 import { getSvgGeometry } from './svg.js';
 import { createShapeGeometry } from './shapes2d.js';
+import { meshObjectGeometry } from './meshData.js';
 import { objectFont } from './fonts.js';
 import { lidEnabled } from './bodies.js';
 import { quaternionFromRot } from './placement.js';
@@ -76,6 +77,7 @@ export function objectLabel(object) {
 	if (object.type === 'text') return object.text?.split('\n').find((line) => line.trim()) || 'empty text';
 	if (object.type === 'hole') return `Hole ⌀${object.holeDiameter ?? 5}`;
 	if (object.type === 'shape') return object.shape ? object.shape[0].toUpperCase() + object.shape.slice(1) : 'Shape';
+	if (object.type === 'mesh') return object.mesh?.name || 'Mesh';
 	return object.text || (object.type === 'svg' ? 'SVG' : 'Image');
 }
 
@@ -135,6 +137,7 @@ export function createObjectGeometry(object, fonts, settings, { holeLength = Mat
 		case 'image': geometry = getMaskGeometry(object)?.clone(); break;
 		case 'svg': geometry = getSvgGeometry(object)?.clone(); break;
 		case 'shape': geometry = createShapeGeometry(object); break;
+		case 'mesh': geometry = object.mesh ? meshObjectGeometry(object) : null; break;
 		case 'hole': return createHoleGeometry(object, holeLength, Math.min(holeDepth ?? holeLength, holeLength));
 		default: geometry = createTextGeometry(object.text, objectFont(fonts, object, settings), object);
 	}

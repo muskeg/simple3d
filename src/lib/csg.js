@@ -49,8 +49,16 @@ export function placeObject(geom, obj, settings, mode = effectiveMode(obj, setti
 		brush.updateMatrixWorld(true);
 		return brush;
 	}
-	const e = Math.max(0.05, obj.extrudeHeight ?? 4);
 	const up = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+	if (obj.type === 'mesh') {
+		// Real-size mesh (bottom at local Y=0): raised sits on the anchor; cuts sink until the top is flush.
+		if (!geom.boundingBox) geom.computeBoundingBox();
+		const height = geom.boundingBox.max.y - geom.boundingBox.min.y;
+		brush.position.set(pos.x, pos.y, pos.z).addScaledVector(up, mode === 'raised' ? -PENETRATION : PENETRATION - height);
+		brush.updateMatrixWorld(true);
+		return brush;
+	}
+	const e = Math.max(0.05, obj.extrudeHeight ?? 4);
 
 	const depth = Math.max(0.001, mode === 'flush_inlay' ? obj.inlayDepth ?? 2 : obj.insetDepth ?? settings.insetDepth);
 	const slab = (mode === 'raised' ? e : depth) + PENETRATION;
