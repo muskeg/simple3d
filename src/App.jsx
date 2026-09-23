@@ -4,7 +4,8 @@ import Viewport from './components/Viewport.jsx';
 import ScenePanel from './components/ScenePanel.jsx';
 import Inspector from './components/Inspector.jsx';
 import { useMediaQuery, usePersistentState } from './components/ui.jsx';
-import { buildModel, initGeometryEngine, withPrintLayout } from './lib/csg.js';
+import { buildModel, disposeGroup, initGeometryEngine, withPrintLayout } from './lib/csg.js';
+import { createBuilder } from './lib/buildClient.js';
 import manifoldWasmURL from 'manifold-3d/manifold.wasm?url';
 import { export3MF, exportSTL, downloadBlob } from './lib/exporters.js';
 import { rotationPresetForFace, facePositionPreset, facePlacementPreset } from './lib/placement.js';
@@ -16,9 +17,15 @@ import { FONTS, MAX_FONT_BYTES, bufferToBase64, parseFontData } from './lib/font
 import { parseProject, serializeProject, MAX_PROJECT_BYTES } from './lib/project.js';
 import { PRESETS, presetSettings } from './lib/presets.js';
 import { alignObjects, bodyCenter, centerOnFace, distributeObjects, nudgeObjects } from './lib/align.js';
+import { arrayInstances } from './lib/arrays.js';
 
 const ARROWS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
 const DEFAULT_PREFS = { gridSnap: false, gridStep: 1, angleStep: 15 };
+const HISTORY_LIMIT = 100;
+const HISTORY_COALESCE_MS = 400;
+const BUILD_DEBOUNCE_MS = 120;
+const AUTOSAVE_KEY = 'simple3d.autosave';
+const AUTOSAVE_DELAY_MS = 1000;
 
 let objectIdCounter = 0;
 function makeObject(overrides = {}) {
@@ -83,6 +90,41 @@ const DEFAULT_SETTINGS = {
 
 const freshSettings = () => ({ ...DEFAULT_SETTINGS, objects: [makeObject()] });
 
+/** Which fields changed between two settings snapshots, e.g. "width" or "3:pos,face". */
+function changeSignature(before, after) {
+	const keys = Object.keys({ ...before, ...after }).filter((key) => key !== 'objects' && before[key] !== after[key]);
+	if (before.objects !== after.objects) {
+		const same = before.objects.length === after.objects.length && before.objects.every((object, index) => object.id === after.objects[index].id);
+		if (!same) keys.push('objects');
+		else after.objects.forEach((object, index) => {
+			const old = before.objects[index];
+			if (old !== object) keys.push(`${object.id}:${Object.keys({ ...old, ...object }).filter((key) => old[key] !== object[key]).sort().join(',')}`);
+		});
+	}
+	return keys.sort().join('|');
+}
+
+/** Validates project JSON and decodes its images/SVGs/fonts, so a build can start immediately. */
+async function loadProjectText(text) {
+	const { settings, maxId } = parseProject(text, DEFAULT_SETTINGS);
+	for (const object of settings.objects) {
+		if (object.type === 'image') await preloadMaskImage(object.image);
+		if (object.type === 'svg') validateSvg(object.svg);
+	}
+	for (const entry of settings.customFonts || []) parseFontData(entry.data);
+	objectIdCounter = Math.max(objectIdCounter, maxId);
+	return settings;
+}
+
+async function restoreAutosave() {
+	try {
+		const text = localStorage.getItem(AUTOSAVE_KEY);
+		return text ? await loadProjectText(text) : null;
+	} catch {
+		return null;
+	}
+}
+
 export default function App() {
 	const [settings, setSettings] = useState(DEFAULT_SETTINGS);
 	const [font, setFont] = useState(null);
@@ -100,41 +142,150 @@ export default function App() {
 	const setSelectedId = useCallback((id) => setSelection(id == null ? [] : [id]), []);
 
 	const modelRef = useRef(null); // live model group (for export)
-	const timerRef = useRef(null);
 	const savedRef = useRef(DEFAULT_SETTINGS); // last saved/loaded/preset state, for the unsaved-changes prompt
 	const onModelRef = useCallback((group) => { modelRef.current = group; }, []);
+	const settingsRef = useRef(settings);
+	settingsRef.current = settings;
+	const fontsRef = useRef(font);
+	fontsRef.current = font;
+	const builderRef = useRef(null);
+	const autosaveReady = useRef(false);
+	const [notice, setNotice] = useState(null);
 
-	// Load the typeface font once.
+	// Undo history of settings snapshots; bursts of edits to the same fields (typing, scrubbing, dragging) coalesce into one step.
+	const historyRef = useRef({ past: [], future: [], committed: DEFAULT_SETTINGS, timer: 0, seen: DEFAULT_SETTINGS, signature: null });
+	const [, setHistoryVersion] = useState(0);
+	const pushHistory = useCallback((snapshot) => {
+		const history = historyRef.current;
+		if (snapshot === history.committed) return;
+		history.past.push(history.committed);
+		if (history.past.length > HISTORY_LIMIT) history.past.shift();
+		history.future = [];
+		history.committed = snapshot;
+		setHistoryVersion((version) => version + 1);
+	}, []);
+	const commitHistory = useCallback(() => {
+		clearTimeout(historyRef.current.timer);
+		historyRef.current.signature = null;
+		pushHistory(settingsRef.current);
+	}, [pushHistory]);
+	// Scrubs, drags and gizmo moves stay one step however slowly they run.
+	const pointerDown = useRef(false);
+	const commitWhenIdle = useCallback(() => {
+		if (pointerDown.current) historyRef.current.timer = setTimeout(commitWhenIdle, HISTORY_COALESCE_MS);
+		else commitHistory();
+	}, [commitHistory]);
+	useEffect(() => {
+		const down = () => { pointerDown.current = true; };
+		const up = () => { pointerDown.current = false; };
+		window.addEventListener('pointerdown', down, true);
+		window.addEventListener('pointerup', up, true);
+		window.addEventListener('pointercancel', up, true);
+		return () => {
+			window.removeEventListener('pointerdown', down, true);
+			window.removeEventListener('pointerup', up, true);
+			window.removeEventListener('pointercancel', up, true);
+		};
+	}, []);
+	useEffect(() => {
+		const history = historyRef.current;
+		const previous = history.seen;
+		history.seen = settings;
+		if (settings === history.committed) return;
+		const signature = changeSignature(previous, settings);
+		if (history.signature !== null && signature !== history.signature) pushHistory(previous);
+		history.signature = signature;
+		clearTimeout(history.timer);
+		history.timer = setTimeout(commitWhenIdle, HISTORY_COALESCE_MS);
+	}, [settings, commitWhenIdle, pushHistory]);
+	const restoreSnapshot = useCallback((target) => {
+		historyRef.current.committed = target;
+		historyRef.current.signature = null;
+		setSettings(target);
+		const ids = new Set(target.objects.map((object) => object.id));
+		setSelection((current) => current.filter((id) => ids.has(id)));
+		setHistoryVersion((version) => version + 1);
+	}, []);
+	const undo = useCallback(() => {
+		commitHistory();
+		const history = historyRef.current;
+		if (!history.past.length) return;
+		history.future.push(history.committed);
+		restoreSnapshot(history.past.pop());
+	}, [commitHistory, restoreSnapshot]);
+	const redo = useCallback(() => {
+		commitHistory();
+		const history = historyRef.current;
+		if (!history.future.length) return;
+		history.past.push(history.committed);
+		restoreSnapshot(history.future.pop());
+	}, [commitHistory, restoreSnapshot]);
+	const canUndo = historyRef.current.past.length > 0 || settings !== historyRef.current.committed;
+	const canRedo = historyRef.current.future.length > 0 && settings === historyRef.current.committed;
+
+	useEffect(() => {
+		const builder = createBuilder({ wasmURL: manifoldWasmURL, fontBase: import.meta.env.BASE_URL, fallback: (s) => buildModel(s, fontsRef.current) });
+		builderRef.current = builder;
+		builder.started.then(() => { document.documentElement.dataset.buildMode = builder.state.mode; });
+		return () => builder.dispose();
+	}, []);
+
+	// Load the engine and fonts once, restoring the autosaved design before the first build.
 	useEffect(() => {
 		let cancelled = false;
 		const loader = new FontLoader();
 		Promise.all([initGeometryEngine(manifoldWasmURL), Promise.all(FONTS.map(async (entry) => [entry.id, await loader.loadAsync(`${import.meta.env.BASE_URL}fonts/${entry.file}`)]))])
-			.then(([, entries]) => { if (!cancelled) setFont(Object.fromEntries(entries)); })
+			.then(async ([, entries]) => {
+				const restored = await restoreAutosave();
+				if (cancelled) return;
+				if (restored) {
+					historyRef.current = { past: [], future: [], committed: restored, timer: 0, seen: restored, signature: null };
+					setSettings(restored);
+					setSelection(restored.objects[0] ? [restored.objects[0].id] : []);
+					setNotice('Restored your previous session.');
+				}
+				autosaveReady.current = true;
+				setFont(Object.fromEntries(entries));
+			})
 			.catch(() => { if (!cancelled) setFontError('Unable to load the geometry engine or fonts. Check your connection and reload.'); });
 		return () => {
 			cancelled = true;
 		};
 	}, []);
 
-	// Rebuild the model whenever settings (or the font) change — debounced.
 	useEffect(() => {
-		if (!font) return;
-		setBuilding(true);
-		clearTimeout(timerRef.current);
-		timerRef.current = setTimeout(() => {
+		if (!autosaveReady.current) return undefined;
+		const timer = setTimeout(() => {
 			try {
-				const g = buildModel(settings, font);
-				setModel(g);
-				setBuiltSettings(settings);
-				setError(g.children.length ? null : 'No solid remains. Reduce the cut depth or move an object.');
-			} catch (e) {
+				localStorage.setItem(AUTOSAVE_KEY, serializeProject(settings));
+			} catch {
+				setNotice('Autosave paused: this design is too large for browser storage. Use File > Save project.');
+			}
+		}, AUTOSAVE_DELAY_MS);
+		return () => clearTimeout(timer);
+	}, [settings]);
+
+	// Rebuild in the worker whenever settings (or the fonts) change; stale results are discarded.
+	useEffect(() => {
+		if (!font) return undefined;
+		setBuilding(true);
+		const timer = setTimeout(() => {
+			const requested = settings;
+			builderRef.current.build(requested).then((group) => {
+				if (!group) return;
+				if (settingsRef.current !== requested) { disposeGroup(group); return; }
+				setModel(group);
+				setBuiltSettings(requested);
+				setError(group.children.length ? null : 'No solid remains. Reduce the cut depth or move an object.');
+				setBuilding(false);
+			}, (e) => {
+				if (settingsRef.current !== requested) return;
 				console.error('Model build failed', e);
 				setError(e.message || String(e));
-			} finally {
 				setBuilding(false);
-			}
-		}, 180);
-		return () => clearTimeout(timerRef.current);
+			});
+		}, BUILD_DEBOUNCE_MS);
+		return () => clearTimeout(timer);
 	}, [settings, font]);
 
 	const setNumber = useCallback(
@@ -285,13 +436,27 @@ export default function App() {
 		}));
 	}, [settings.customFonts]);
 
+	const explodeArray = useCallback((id) => {
+		const source = settings.objects.find((object) => object.id === id);
+		if (!source) return;
+		const original = { ...source, arrayKind: 'none' };
+		const copies = arrayInstances(source).slice(1).map((placement) => ({ ...original, ...placement, id: ++objectIdCounter, face: 'auto' }));
+		setSettings((s) => ({ ...s, objects: s.objects.flatMap((object) => (object.id === id ? [original, ...copies] : [object])) }));
+		setSelection([...copies.map((copy) => copy.id), id]);
+	}, [settings]);
+
 	const latest = useRef(null);
-	latest.current = { settings, selection, removeObjects, duplicateObjects, updateObjects };
+	latest.current = { settings, selection, removeObjects, duplicateObjects, updateObjects, undo, redo };
 	useEffect(() => {
 		const onKey = (event) => {
 			if (event.target.closest?.('input, textarea, select, [contenteditable="true"], [role="menu"]') || document.querySelector('[role="menu"]')) return;
 			const { settings: s, selection: ids, removeObjects: remove, duplicateObjects: duplicate, updateObjects: update } = latest.current;
 			const modifier = event.ctrlKey || event.metaKey;
+			const key = event.key.toLowerCase();
+			if (modifier && (key === 'z' || key === 'y')) {
+				event.preventDefault();
+				return key === 'y' || event.shiftKey ? latest.current.redo() : latest.current.undo();
+			}
 			if (event.key === 'Escape') return setSelection([]);
 			if (!ids.length) return;
 			if (event.key === 'Delete' || event.key === 'Backspace') {
@@ -345,13 +510,7 @@ export default function App() {
 	const onLoadProject = useCallback(async (file) => {
 		if (file.size > MAX_PROJECT_BYTES) throw new Error('Project file is too large.');
 		if (settings !== savedRef.current && !window.confirm('Discard unsaved changes and open this project?')) return;
-		const { settings: next, maxId } = parseProject(await file.text(), DEFAULT_SETTINGS);
-		for (const object of next.objects) {
-			if (object.type === 'image') await preloadMaskImage(object.image);
-			if (object.type === 'svg') validateSvg(object.svg);
-		}
-		objectIdCounter = Math.max(objectIdCounter, maxId);
-		replaceSettings(next);
+		replaceSettings(await loadProjectText(await file.text()));
 	}, [settings, replaceSettings]);
 
 	const onApplyPreset = useCallback((id) => {
@@ -410,6 +569,7 @@ export default function App() {
 			onDistribute={onDistribute}
 			onCenterOnFace={onCenterOnFace}
 			onCenterOnBody={onCenterOnBody}
+			explodeArray={explodeArray}
 			prefs={prefs}
 			setPrefs={setPrefs}
 			className={isDesktop ? 'min-h-full' : ''}
@@ -442,6 +602,12 @@ export default function App() {
 				fontError={fontError}
 				ready={ready}
 				inspector={isDesktop ? null : inspector}
+				undo={undo}
+				redo={redo}
+				canUndo={canUndo}
+				canRedo={canRedo}
+				notice={notice}
+				onDismissNotice={() => setNotice(null)}
 			/>
 			<Viewport model={model} onModelRef={onModelRef} settings={settings} fonts={font} selection={selection} onSelect={selectObject} onUpdate={onViewportUpdate} prefs={prefs} onToggleGridSnap={() => setPrefs({ ...prefs, gridSnap: !prefs.gridSnap })} />
 			{isDesktop && <aside aria-label="Inspector" className="panel-scroll w-[300px] shrink-0 overflow-y-auto border-l border-white/10 bg-neutral-900">{inspector}</aside>}

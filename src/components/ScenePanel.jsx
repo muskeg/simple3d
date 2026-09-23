@@ -6,7 +6,7 @@ import { MAX_SVG_BYTES } from '../lib/svg.js';
 import { objectLabel } from '../lib/objects.js';
 import { lidEnabled, shellEnabled } from '../lib/bodies.js';
 import { PRESETS } from '../lib/presets.js';
-import { Copy, Trash2, Image, Type, Download, Shapes, CircleDot, FileCode, Save, FolderOpen, ChevronDown, FilePlus, Box, Cylinder, Circle, Cone, Pyramid, Hexagon, Disc, Donut, Menu as MenuIcon, Sparkles } from 'lucide-react';
+import { Copy, Trash2, Image, Type, Download, Shapes, CircleDot, FileCode, Save, FolderOpen, ChevronDown, FilePlus, Box, Cylinder, Circle, Cone, Pyramid, Hexagon, Disc, Donut, Menu as MenuIcon, Sparkles, Undo2, Redo2, X } from 'lucide-react';
 
 export const MODES = [
 	{ id: 'raised', label: 'Raised' },
@@ -158,7 +158,7 @@ function ObjectsTab({ settings: s, setNumber, setMode, selection, onSelect, addO
 export default function ScenePanel({
 	settings, setNumber, setMode, selection, onSelect, addObject, addImageObject, addSvgObject, duplicateObjects, removeObjects,
 	onNewProject, onSaveProject, onLoadProject, onApplyPreset, onExport3MF, onExportSTL,
-	building, exporting, error, warning, fontError, ready, inspector,
+	building, exporting, error, warning, fontError, ready, inspector, undo, redo, canUndo, canRedo, notice, onDismissNotice,
 }) {
 	const [tab, setTab] = useState('objects');
 	const [fileError, setFileError] = useState(null);
@@ -194,11 +194,14 @@ export default function ScenePanel({
 				</Menu>
 				<h1 className="text-sm font-semibold tracking-tight">Simple 3D</h1>
 				{building && (
-					<span className="ml-auto flex items-center gap-1.5 text-[11px] text-neutral-400">
+					<span className="flex items-center gap-1.5 text-[11px] text-neutral-400" title="Building">
 						<span className="h-3 w-3 animate-spin rounded-full border border-neutral-500 border-t-indigo-400" />
-						Building
 					</span>
 				)}
+				<div className="ml-auto flex gap-1">
+					<IconButton label="Undo (Ctrl+Z)" Icon={Undo2} onClick={undo} disabled={!canUndo} />
+					<IconButton label="Redo (Ctrl+Shift+Z)" Icon={Redo2} onClick={redo} disabled={!canRedo} />
+				</div>
 			</header>
 			<div role="tablist" aria-label="Panels" className="flex border-b border-white/10 px-2">
 				{tabs.map(({ id, label }) => (
@@ -222,6 +225,12 @@ export default function ScenePanel({
 				{(error || fileError) && <p role="alert" className="rounded bg-red-500/15 px-2 py-1 text-[11px] text-red-300">{error || fileError}</p>}
 				{fontError && <p className="rounded bg-amber-500/15 px-2 py-1 text-[11px] text-amber-300">{fontError}</p>}
 				{warning && <p role="status" className="rounded bg-amber-500/15 px-2 py-1 text-[11px] text-amber-300">{warning}</p>}
+				{notice && (
+					<p data-testid="notice" className="flex items-start gap-2 rounded bg-indigo-500/10 px-2 py-1 text-[11px] text-indigo-200">
+						<span className="flex-1">{notice}</span>
+						<button onClick={onDismissNotice} aria-label="Dismiss notice" className="text-indigo-300 hover:text-white"><X size={12} /></button>
+					</p>
+				)}
 				<div className="relative flex">
 					<button onClick={onExport3MF} disabled={exporting || !ready || uploading} className="flex-1 rounded-l-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:opacity-50">
 						<Download size={14} className="mr-2 inline" />{exporting ? 'Exporting…' : 'Download .3MF'}

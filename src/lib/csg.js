@@ -3,6 +3,7 @@ import { quaternionFromRot } from './placement.js';
 import { getEngine, toSolid, solidToGeometry } from './engine.js';
 import { createBaseSolid, createLidSolid, lidPrintMatrix } from './bodies.js';
 import { createObjectGeometry, effectiveMode, objectBody } from './objects.js';
+import { expandObjects } from './arrays.js';
 
 export { initGeometryEngine } from './engine.js';
 
@@ -76,28 +77,34 @@ export function placeObject(geom, obj, settings, mode = effectiveMode(obj, setti
 function buildBody(body, bodySolid, settings, fonts, parent, track, release) {
 	let result = bodySolid;
 	const inlays = [];
-	const objects = (settings.objects || []).filter((object) => objectBody(object, settings) === body);
+	const objects = expandObjects((settings.objects || []).filter((object) => objectBody(object, settings) === body));
+	// Array copies share their source's geometry; only the placement differs.
+	const geometries = new Map();
 	const cutterFor = (object, mode) => {
-		const geometry = createObjectGeometry(object, fonts, settings);
-		if (!geometry) return null;
-		try { return track(toSolid(geometry, placeObject(geometry, object, settings, mode).matrixWorld)); } finally { geometry.dispose(); }
+		if (!geometries.has(object.id)) geometries.set(object.id, createObjectGeometry(object, fonts, settings));
+		const geometry = geometries.get(object.id);
+		return geometry ? track(toSolid(geometry, placeObject(geometry, object, settings, mode).matrixWorld)) : null;
 	};
 	const replace = (previous, next) => { release(previous); return track(next); };
-	for (const phase of [['inset', 'flush_inlay'], ['raised'], ['hole']]) {
-		for (const object of objects) {
-			const mode = effectiveMode(object, settings);
-			if (!phase.includes(mode)) continue;
-			const cutter = cutterFor(object, mode);
-			if (!cutter) continue;
-			if (mode === 'flush_inlay') inlays.push({ id: object.id, solid: track(result.intersect(cutter)) });
-			if (mode === 'raised') result = replace(result, result.add(cutter));
-			else result = replace(result, result.subtract(cutter));
-			if (mode === 'raised' || mode === 'hole') for (const inlay of inlays) inlay.solid = replace(inlay.solid, inlay.solid.subtract(cutter));
-			release(cutter);
+	try {
+		for (const phase of [['inset', 'flush_inlay'], ['raised'], ['hole']]) {
+			for (const object of objects) {
+				const mode = effectiveMode(object, settings);
+				if (!phase.includes(mode)) continue;
+				const cutter = cutterFor(object, mode);
+				if (!cutter) continue;
+				if (mode === 'flush_inlay') inlays.push({ name: `Inlay_${object.id}${object.instance ? `.${object.instance}` : ''}`, solid: track(result.intersect(cutter)) });
+				if (mode === 'raised') result = replace(result, result.add(cutter));
+				else result = replace(result, result.subtract(cutter));
+				if (mode === 'raised' || mode === 'hole') for (const inlay of inlays) inlay.solid = replace(inlay.solid, inlay.solid.subtract(cutter));
+				release(cutter);
+			}
 		}
+	} finally {
+		for (const geometry of geometries.values()) geometry?.dispose();
 	}
 	for (const inlay of inlays) {
-		const mesh = resultMesh(inlay.solid, `Inlay_${inlay.id}`, 0xe8a33d, body);
+		const mesh = resultMesh(inlay.solid, inlay.name, 0xe8a33d, body);
 		if (mesh) parent.add(mesh);
 	}
 	const mesh = resultMesh(result, body === 'lid' ? 'Lid_Mesh' : 'Base_Mesh', 0x8a93a6, body);
@@ -155,6 +162,47 @@ export function withPrintLayout(group, fn) {
 		lid.scale.copy(saved.scale);
 		group.updateMatrixWorld(true);
 	}
+}
+
+/** Plain, transferable description of a built model (sent from the build worker). */
+export function partsFromGroup(group) {
+	const parts = [];
+	group.traverse((mesh) => {
+		if (!mesh.isMesh) return;
+		parts.push({
+			name: mesh.name,
+			body: mesh.userData.body || 'base',
+			color: mesh.material.color.getHex(),
+			positions: mesh.geometry.attributes.position.array,
+			indices: mesh.geometry.index.array,
+		});
+	});
+	const lid = group.getObjectByName('Lid');
+	return { parts, hasLid: !!lid, printMatrix: lid?.userData.printMatrix?.toArray() ?? null };
+}
+
+/** Rebuilds the model group produced by buildModel from partsFromGroup output. */
+export function groupFromParts({ parts, hasLid, printMatrix }) {
+	const group = new THREE.Group();
+	group.name = 'Model';
+	const lid = hasLid ? new THREE.Group() : null;
+	if (lid) {
+		lid.name = 'Lid';
+		if (printMatrix) lid.userData.printMatrix = new THREE.Matrix4().fromArray(printMatrix);
+	}
+	for (const part of parts) {
+		const geometry = new THREE.BufferGeometry();
+		geometry.setAttribute('position', new THREE.BufferAttribute(part.positions, 3));
+		geometry.setIndex(new THREE.BufferAttribute(part.indices, 1));
+		geometry.computeVertexNormals();
+		geometry.computeBoundingBox();
+		const mesh = new THREE.Mesh(geometry, makePreviewMaterial(part.color));
+		mesh.name = part.name;
+		mesh.userData.body = part.body;
+		(part.body === 'lid' && lid ? lid : group).add(mesh);
+	}
+	if (lid) group.add(lid);
+	return group;
 }
 
 /** Disposes every geometry/material/bvh in a group. */

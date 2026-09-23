@@ -575,3 +575,100 @@ test('multi-select alignment, distribution, nudging and shortcuts', async ({ pag
 	await expect(grid).toHaveAttribute('aria-pressed', 'true');
 	await ready(page);
 });
+
+test('worker builds, undo/redo history and autosave restore', async ({ page }) => {
+	await expect.poll(() => page.evaluate(() => document.documentElement.dataset.buildMode)).toBe('worker');
+	const undo = page.getByRole('button', { name: 'Undo (Ctrl+Z)', exact: true });
+	const redo = page.getByRole('button', { name: 'Redo (Ctrl+Shift+Z)', exact: true });
+	await expect(undo).toBeDisabled();
+	await tab(page, 'Base');
+	const width = page.getByRole('textbox', { name: 'Width', exact: true });
+	const height = page.getByRole('textbox', { name: 'Height', exact: true });
+	await number(page, 'Width', 80);
+	await number(page, 'Depth', 50);
+	// Scrubbing a label emits many edits to one field; they undo as a single step.
+	const label = await page.getByText('Height', { exact: true }).boundingBox();
+	await page.mouse.move(label.x + 5, label.y + 5);
+	await page.mouse.down();
+	await page.mouse.move(label.x + 65, label.y + 5, { steps: 10 });
+	await page.mouse.up();
+	await expect(height).not.toHaveValue('12');
+	await undo.click();
+	await expect(height).toHaveValue('12');
+	await expect(page.getByRole('textbox', { name: 'Depth', exact: true })).toHaveValue('50');
+	await undo.click();
+	await expect(page.getByRole('textbox', { name: 'Depth', exact: true })).toHaveValue('60');
+	await expect(width).toHaveValue('80');
+	await undo.click();
+	await expect(width).toHaveValue('100');
+	await expect(undo).toBeDisabled();
+	await redo.click();
+	await expect(width).toHaveValue('80');
+	await ready(page);
+	expect((await stl(page)).size[0]).toBeCloseTo(80, 3);
+
+	await tab(page, 'Objects');
+	await page.getByRole('button', { name: 'Delete ABC', exact: true }).click();
+	await expect(page.getByTestId('object-row')).toHaveCount(0);
+	await page.keyboard.press('Control+z');
+	await expect(page.getByTestId('object-row')).toHaveCount(1);
+	await page.keyboard.press('Control+Shift+z');
+	await expect(page.getByTestId('object-row')).toHaveCount(0);
+	await page.keyboard.press('Control+z');
+	await page.getByRole('button', { name: 'Select ABC', exact: true }).click();
+	await page.getByRole('textbox', { name: 'Text', exact: true }).fill('Kept');
+	await ready(page);
+
+	await expect.poll(() => page.evaluate(() => {
+		const saved = JSON.parse(localStorage.getItem('simple3d.autosave') || 'null');
+		return saved && [saved.settings.width, saved.settings.objects.map((object) => object.text).join()];
+	})).toEqual([80, 'Kept']);
+	await page.reload();
+	await ready(page);
+	await expect(page.getByTestId('notice')).toContainText('Restored your previous session');
+	await expect(page.getByRole('button', { name: 'Select Kept', exact: true })).toBeVisible();
+	await tab(page, 'Base');
+	await expect(width).toHaveValue('80');
+	expect((await stl(page)).size[0]).toBeCloseTo(80, 3);
+	await expect(page.getByRole('button', { name: 'Undo (Ctrl+Z)', exact: true })).toBeDisabled();
+	page.on('dialog', (dialog) => dialog.accept());
+	await fileMenu(page, 'New project');
+	await expect(width).toHaveValue('100');
+});
+
+test('linear, grid and circular arrays build, export and convert to objects', async ({ page }) => {
+	await expand(page, 'Transform');
+	await number(page, 'Position X', -25);
+	await page.getByRole('button', { name: 'Flush Inlay', exact: true }).click();
+	await expand(page, 'Array');
+	const inlays = async () => (await modelXml(page)).match(/name="Inlay_[^"]*"/g);
+
+	await page.getByRole('button', { name: 'Linear array', exact: true }).click();
+	await number(page, 'Spacing', 25);
+	expect(await inlays()).toEqual(['name="Inlay_1"', 'name="Inlay_1.1"', 'name="Inlay_1.2"']);
+
+	await page.getByRole('button', { name: 'Grid array', exact: true }).click();
+	await number(page, 'Rows', 2);
+	await number(page, 'Row Spacing', 15);
+	expect(await inlays()).toHaveLength(6);
+
+	await page.getByRole('button', { name: 'Circular array', exact: true }).click();
+	await number(page, 'Position X', 0);
+	await number(page, 'Position Z', -15);
+	await number(page, 'Count', 6);
+	await number(page, 'Array Radius', 15);
+	expect(await inlays()).toHaveLength(6);
+	await page.getByRole('checkbox', { name: 'Rotate copies', exact: true }).uncheck();
+	await ready(page);
+
+	await page.getByRole('button', { name: 'Convert to separate objects', exact: true }).click();
+	await expect(page.getByTestId('object-row')).toHaveCount(6);
+	await ready(page);
+	expect(await inlays()).toHaveLength(6);
+	await expect(page.getByText('6 objects selected', { exact: true })).toBeVisible();
+	await page.getByRole('button', { name: 'Undo (Ctrl+Z)', exact: true }).click();
+	await expect(page.getByTestId('object-row')).toHaveCount(1);
+	await page.getByRole('button', { name: 'No array', exact: true }).click();
+	await ready(page);
+	expect(await inlays()).toEqual(['name="Inlay_1"']);
+});

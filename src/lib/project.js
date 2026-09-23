@@ -4,6 +4,7 @@ import { FACES } from './placement.js';
 import { SHAPE_KINDS } from './shapes2d.js';
 import { OBJECT_MODES, HOLE_HEADS } from './objects.js';
 import { MAX_SVG_BYTES } from './svg.js';
+import { ARRAY_KINDS } from './arrays.js';
 
 export const PROJECT_APP = 'simple3d';
 export const PROJECT_VERSION = 1;
@@ -21,10 +22,11 @@ const OBJECT_NUMBERS = {
 	threshold: [1, 255], maskResolution: [32, 1024], shapeHeight: [0.5, 300], sides: [3, 24], innerRatio: [0.1, 0.95],
 	cornerRadius: [0, 150], holeDiameter: [0.2, 200], headDiameter: [0.2, 300], headDepth: [0.1, 100],
 	letterSpacing: [-50, 100], lineHeight: [0.5, 3],
+	arrayCount: [1, 400], arrayRows: [1, 400], arraySpacing: [-1000, 1000], arrayRowSpacing: [-1000, 1000], arrayRadius: [0.1, 1000], arraySweep: [1, 360],
 };
 export const MAX_TEXT_LENGTH = 1000;
 const MAX_CUSTOM_FONTS = 8;
-const INTEGER_KEYS = new Set(['chamferSegments', 'radialSegments', 'sides', 'curveSegments', 'threshold', 'maskResolution']);
+const INTEGER_KEYS = new Set(['chamferSegments', 'radialSegments', 'sides', 'curveSegments', 'threshold', 'maskResolution', 'arrayCount', 'arrayRows']);
 const ids = (list) => list.map((entry) => entry.id);
 const OBJECT_ENUMS = {
 	type: ['text', 'image', 'svg', 'shape', 'hole'],
@@ -35,6 +37,7 @@ const OBJECT_ENUMS = {
 	maskChannel: ['alpha', 'dark', 'light'],
 	face: FACES,
 	align: ['left', 'center', 'right'],
+	arrayKind: ids(ARRAY_KINDS),
 };
 const IMAGE_DATA_URL = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
 const BASE64 = /^[A-Za-z0-9+/=]+$/;
@@ -70,6 +73,7 @@ function sanitizeObject(raw, index, fontIds) {
 	const object = { id: Number.isInteger(raw.id) && raw.id > 0 ? raw.id : null, type, pos, rot };
 	if (typeof raw.text === 'string') object.text = raw.text.slice(0, MAX_TEXT_LENGTH);
 	if (typeof raw.mirror === 'boolean') object.mirror = raw.mirror;
+	if (typeof raw.arrayRotate === 'boolean') object.arrayRotate = raw.arrayRotate;
 	for (const [key, limits] of Object.entries(OBJECT_NUMBERS)) {
 		const value = number(raw[key], limits, INTEGER_KEYS.has(key));
 		if (value !== undefined) object[key] = value;

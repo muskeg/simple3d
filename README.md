@@ -35,10 +35,19 @@ you select an object. Sections collapse and remember their state; rarely used
 settings live under **Advanced**, and numeric position/rotation under
 **Transform**.
 
-Keyboard: `Delete`/`Backspace` deletes the selection, `Ctrl/Cmd+D` duplicates
+Keyboard: `Ctrl/Cmd+Z` undoes and `Ctrl/Cmd+Shift+Z` (or `Ctrl+Y`) redoes,
+`Delete`/`Backspace` deletes the selection, `Ctrl/Cmd+D` duplicates
 it, arrow keys nudge it along the primary object's reading axes (1 mm; `Shift`
 10 mm; `Alt` 0.1 mm) and `Escape` clears the selection. Shortcuts are ignored
-while typing in a field.
+while typing in a field, where the browser's own text undo applies.
+
+**Undo/redo** (also in the panel header) keeps the last 100 steps. A burst of
+edits to the same fields, such as typing, scrubbing a label or dragging an
+object, becomes one step; applying a preset, opening a project or starting a
+new one can be undone too. The design is **autosaved** in the browser about a
+second after each change and restored on the next visit. Very large designs
+(big images or fonts) can exceed browser storage; autosave then pauses with a
+notice, and File > Save project still works.
 
 ### Base Dimensions
 
@@ -143,6 +152,14 @@ exact text bounding-box width.
 	boxes to the selection's min, center or max on world X, Y or Z, distribute
 	three or more with equal gaps (the outermost objects stay put), or duplicate
 	and delete them together.
+- **Arrays** repeat an object without extra list entries: **linear** (Count and
+	Spacing along its reading direction), **grid** (plus Rows and Row Spacing
+	downward) or **circular** (Count copies orbiting a center Array Radius below
+	the original, clockwise over the Sweep angle, optionally rotating with the
+	circle). Copies are rigid offsets in the object's surface plane, so they can
+	lift off curved bases. Up to 400 copies per object. Each flush-inlay copy is
+	its own part (`Inlay_<id>`, `Inlay_<id>.1`, ...). **Convert to separate
+	objects** turns the copies into ordinary, independently editable objects.
 
 Objects remain rigid planar extrusions: snapping to an ellipsoid or cone does
 not bend text around it. A large object on a curved surface may make only partial
@@ -262,8 +279,10 @@ provides rendering, glyph outlines, TTF/OTF parsing (via its bundled opentype.js
 and transform/orbit controls. Bundled fonts retain their upstream license in
 [public/fonts/LICENSE](public/fonts/LICENSE) and embedded typeface metadata.
 
-There is no server, autosave or undo history. Reloading resets the editor
-unless you open a saved project. Large masks, high tessellation and many objects can block the
-main thread during rebuilding. WebGL and WebAssembly are required. Physical
+There is no server. Reloading restores the autosaved design. Solid builds run in
+a background Web Worker, so dragging and typing stay responsive while large
+masks, high tessellation, arrays or many objects rebuild; if the worker cannot
+start, builds fall back to the page. WebGL, WebAssembly and module workers are
+required. Physical
 printing, printer tolerances and third-party slicer compatibility must still be
 checked for the intended printer and materials.

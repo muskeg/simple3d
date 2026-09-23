@@ -8,7 +8,10 @@ import { SHAPE_KINDS } from '../lib/shapes2d.js';
 import { OBJECT_MODES, HOLE_HEADS, effectiveMode, objectLabel } from '../lib/objects.js';
 import { lidEnabled } from '../lib/bodies.js';
 import { MAX_TEXT_LENGTH } from '../lib/project.js';
-import { Copy, Trash2, Upload, Circle, RectangleHorizontal, Star, Heart, Hexagon, ArrowRight, AlignStartVertical, AlignCenterVertical, AlignEndVertical, AlignHorizontalDistributeCenter, MoveHorizontal, MoveVertical, Crosshair, Type } from 'lucide-react';
+import { ARRAY_KINDS, MAX_ARRAY_INSTANCES } from '../lib/arrays.js';
+import { Copy, Trash2, Upload, Circle, RectangleHorizontal, Star, Heart, Hexagon, ArrowRight, AlignStartVertical, AlignCenterVertical, AlignEndVertical, AlignHorizontalDistributeCenter, MoveHorizontal, MoveVertical, Crosshair, Type, Minus, Columns3, LayoutGrid, RotateCw } from 'lucide-react';
+
+const ARRAY_ICONS = { none: Minus, linear: Columns3, grid: LayoutGrid, circular: RotateCw };
 
 const FACE_BUTTONS = ['top', 'bottom', 'front', 'back', 'left', 'right'];
 const SHAPE_ICONS = { circle: Circle, rect: RectangleHorizontal, star: Star, heart: Heart, polygon: Hexagon, arrow: ArrowRight };
@@ -53,7 +56,7 @@ function SelectionTools({ objects, onAlign, onDistribute, duplicateObjects, remo
 
 export default function Inspector({
 	settings: s, selection, updateObject, duplicateObjects, removeObjects, snapToFace, setObjectTarget, setObjectImage, setObjectSvg,
-	addCustomFont, onAlign, onDistribute, onCenterOnFace, onCenterOnBody, prefs, setPrefs, className = '',
+	addCustomFont, onAlign, onDistribute, onCenterOnFace, onCenterOnBody, explodeArray, prefs, setPrefs, className = '',
 }) {
 	const objects = selection.map((id) => s.objects.find((object) => object.id === id)).filter(Boolean);
 	const selected = objects.at(-1) || null;
@@ -182,6 +185,32 @@ export default function Inspector({
 						{selected.type === 'text' && <NumberField label="Curve Segments" value={selected.curveSegments} min={2} max={32} hardMax={32} step={1} onChange={(v) => update({ curveSegments: Math.round(v) })} />}
 						{selected.type === 'image' && <NumberField label="Mask Resolution" value={selected.maskResolution ?? 256} min={64} max={1024} hardMax={1024} step={32} onChange={(v) => update({ maskResolution: Math.round(v) })} />}
 					</Group>
+				)}
+			</Section>
+
+			<Section id="insp-array" title="Array" defaultOpen={false}>
+				<Segmented label="Array type" value={selected.arrayKind || 'none'} iconOnly onChange={(arrayKind) => update({ arrayKind })} options={ARRAY_KINDS.map((kind) => ({ ...kind, Icon: ARRAY_ICONS[kind.id] }))} />
+				{(selected.arrayKind || 'none') !== 'none' && (
+					<>
+						<NumberField label="Count" value={selected.arrayCount ?? 3} min={1} max={50} hardMax={MAX_ARRAY_INSTANCES} step={1} onChange={(v) => update({ arrayCount: Math.max(1, Math.round(v)) })} />
+						{selected.arrayKind === 'circular' ? (
+							<>
+								<NumberField label="Array Radius" value={selected.arrayRadius ?? 20} min={0.1} max={500} step={0.5} suffix=" mm" onChange={(v) => update({ arrayRadius: Math.max(0.1, v) })} />
+								<NumberField label="Sweep" value={selected.arraySweep ?? 360} min={1} max={360} hardMax={360} step={5} suffix="°" onChange={(v) => update({ arraySweep: Math.max(1, v) })} />
+								<Checkbox label="Rotate copies" checked={selected.arrayRotate !== false} onChange={(arrayRotate) => update({ arrayRotate })} />
+							</>
+						) : (
+							<NumberField label="Spacing" value={selected.arraySpacing ?? 20} min={-500} max={500} step={0.5} suffix=" mm" onChange={(v) => update({ arraySpacing: v })} />
+						)}
+						{selected.arrayKind === 'grid' && (
+							<>
+								<NumberField label="Rows" value={selected.arrayRows ?? 2} min={1} max={50} hardMax={MAX_ARRAY_INSTANCES} step={1} onChange={(v) => update({ arrayRows: Math.max(1, Math.round(v)) })} />
+								<NumberField label="Row Spacing" value={selected.arrayRowSpacing ?? 20} min={-500} max={500} step={0.5} suffix=" mm" onChange={(v) => update({ arrayRowSpacing: v })} />
+							</>
+						)}
+						<p className="text-[11px] leading-relaxed text-neutral-500">Copies step along the object's own surface plane (circular copies orbit a center below it) and may lift off curved surfaces.</p>
+						<button onClick={() => explodeArray(selected.id)} className="w-full rounded-md border border-neutral-700 bg-neutral-800/50 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-500">Convert to separate objects</button>
+					</>
 				)}
 			</Section>
 

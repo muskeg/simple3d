@@ -10,6 +10,7 @@ import { createBodyGeometry, lidEnabled } from '../lib/bodies.js';
 import { createObjectGeometry, objectBody } from '../lib/objects.js';
 import { quaternionFromRot, rotFromQuaternion, surfacePlacement } from '../lib/placement.js';
 import { snapToGrid } from '../lib/align.js';
+import { arrayInstances } from '../lib/arrays.js';
 
 export default function Viewport({ model, onModelRef, settings, fonts, selection, onSelect, onUpdate, prefs, onToggleGridSnap }) {
 	const selectedId = selection.at(-1) ?? null;
@@ -407,6 +408,13 @@ export default function Viewport({ model, onModelRef, settings, fonts, selection
 			mesh.position.copy(brush.position).sub(root.position).applyQuaternion(root.quaternion.clone().invert());
 			mesh.scale.copy(brush.scale);
 			root.add(mesh);
+			root.updateMatrix();
+			const toRoot = root.matrix.clone().invert();
+			for (const placement of arrayInstances(object).slice(1)) {
+				const copy = new THREE.Mesh(geometry, mesh.material);
+				toRoot.clone().multiply(placeObject(geometry, { ...object, ...placement }, settings).matrixWorld).decompose(copy.position, copy.quaternion, copy.scale);
+				root.add(copy);
+			}
 			state.proxies.add(root);
 		}
 		state.proxies.updateMatrixWorld(true);

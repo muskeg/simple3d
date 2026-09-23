@@ -17,15 +17,21 @@ import { contours } from 'd3-contour';
  */
 const cache = new Map();
 const MAX_CACHE = 24;
-const imageCache = new Map(); // dataURL -> HTMLImageElement
+const imageCache = new Map(); // dataURL -> HTMLImageElement (page) or ImageBitmap (worker)
+const inWorker = typeof document === 'undefined';
 
-/** Decodes a dataURL into an HTMLImageElement (cached). */
+/** Decodes a dataURL into a drawable image (cached). */
 export async function preloadMaskImage(dataURL) {
 	if (imageCache.has(dataURL)) return imageCache.get(dataURL);
-	const image = new Image();
-	image.src = dataURL;
+	let image;
 	try {
-		await image.decode();
+		if (inWorker) {
+			image = await createImageBitmap(await (await fetch(dataURL)).blob());
+		} else {
+			image = new Image();
+			image.src = dataURL;
+			await image.decode();
+		}
 	} catch {
 		throw new Error('Unable to decode image. Choose a valid PNG, JPEG, WebP or GIF.');
 	}
@@ -74,7 +80,7 @@ function buildMaskGeometry(image, obj) {
 	const w = Math.max(1, Math.round(iw * scale));
 	const h = Math.max(1, Math.round(ih * scale));
 
-	const canvas = document.createElement('canvas');
+	const canvas = inWorker ? new OffscreenCanvas(w, h) : document.createElement('canvas');
 	canvas.width = w;
 	canvas.height = h;
 	const ctx = canvas.getContext('2d', { willReadFrequently: true });

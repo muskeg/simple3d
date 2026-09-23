@@ -12,6 +12,7 @@ import { getEngine, solidToGeometry, withTracking, Z_TO_Y_ARRAY } from './engine
 export const MAX_SVG_BYTES = 2 * 1024 * 1024;
 const cache = new Map();
 const MAX_CACHE = 16;
+const polygonCache = new Map();
 
 function svgContours(text) {
 	const data = new SVGLoader().parse(text);
@@ -35,12 +36,26 @@ export function validateSvg(text) {
 	if (!shapes.length) throw new Error('SVG contains no filled shapes.');
 }
 
+/**
+ * Filled SVG outlines as polygon rings (cached). Needs DOMParser, so the page
+ * computes these and passes them to the build worker as `svgPolygons`.
+ */
+export function getSvgPolygons(text) {
+	if (!polygonCache.has(text)) {
+		let shapes;
+		try { shapes = svgContours(text); } catch { shapes = []; }
+		polygonCache.set(text, shapes);
+		if (polygonCache.size > MAX_CACHE) polygonCache.delete(polygonCache.keys().next().value);
+	}
+	return polygonCache.get(text);
+}
+
 /** Returns a (possibly cached) unit-prism geometry for an SVG object, or null. */
 export function getSvgGeometry(object) {
 	if (!object.svg) return null;
 	const key = `${object.fontSize ?? 40}|${object.svg}`;
 	if (!cache.has(key)) {
-		cache.set(key, buildSvgGeometry(object.svg, Math.max(0.1, object.fontSize ?? 40)));
+		cache.set(key, buildSvgGeometry(object.svgPolygons ?? getSvgPolygons(object.svg), Math.max(0.1, object.fontSize ?? 40)));
 		if (cache.size > MAX_CACHE) {
 			const oldest = cache.keys().next().value;
 			cache.get(oldest)?.dispose();
@@ -50,10 +65,8 @@ export function getSvgGeometry(object) {
 	return cache.get(key);
 }
 
-function buildSvgGeometry(text, width) {
+function buildSvgGeometry(shapes, width) {
 	const { CrossSection } = getEngine();
-	let shapes;
-	try { shapes = svgContours(text); } catch { return null; }
 	if (!shapes.length) return null;
 	return withTracking((track) => {
 		const sections = shapes.map((rings) => track(new CrossSection(rings, 'EvenOdd')));
