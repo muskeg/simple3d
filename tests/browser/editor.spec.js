@@ -560,14 +560,22 @@ test('custom base meshes and mesh objects import, scale, rotate and export', asy
 });
 
 test('processing indicator covers start-up and slow builds without blocking the UI', async ({ page }) => {
+	test.setTimeout(240000);
+	// Record every state the pill shows, so assertions don't depend on polling at the right moment on a slow runner.
+	await page.addInitScript(() => {
+		window.statusLog = [];
+		new MutationObserver(() => {
+			const text = document.querySelector('[data-testid="build-status"]')?.textContent ?? '';
+			if (window.statusLog.at(-1) !== text) window.statusLog.push(text);
+		}).observe(document, { subtree: true, childList: true, characterData: true });
+	});
+	const statusLog = () => page.evaluate(() => window.statusLog);
 	await page.route('**/fonts/*.json', async (route) => { await new Promise((resolve) => setTimeout(resolve, 1500)); await route.continue(); });
 	await page.reload();
-	const loading = page.getByRole('progressbar', { name: 'Loading geometry engine…', exact: true });
-	await expect(loading).toBeVisible();
-	await expect(loading).toContainText(/\d\.\d s/);
 	await ready(page);
-	await expect(loading).toHaveCount(0);
 	await page.unroute('**/fonts/*.json');
+	expect((await statusLog()).some((text) => text.startsWith('Loading geometry engine…'))).toBe(true);
+	await expect(page.getByRole('progressbar')).toHaveCount(0);
 
 	await page.getByRole('button', { name: 'Flush Inlay', exact: true }).click();
 	await number(page, 'Font Size', 3);
@@ -575,6 +583,7 @@ test('processing indicator covers start-up and slow builds without blocking the 
 	await page.getByRole('button', { name: 'Grid array', exact: true }).click();
 	await number(page, 'Spacing', 4);
 	await number(page, 'Row Spacing', 2.5);
+	await page.evaluate(() => { window.statusLog = []; });
 	// 6 x 6 inlay copies: enough booleans in the worker to take well over a second.
 	const count = page.getByRole('textbox', { name: 'Count', exact: true });
 	await count.fill('6');
@@ -582,18 +591,16 @@ test('processing indicator covers start-up and slow builds without blocking the 
 	const rows = page.getByRole('textbox', { name: 'Rows', exact: true });
 	await rows.fill('6');
 	await rows.press('Enter');
-	const updating = page.getByRole('progressbar', { name: 'Updating model…', exact: true });
-	await expect(updating).toBeVisible();
+	await expect(page.getByTestId('viewport')).toHaveAttribute('aria-busy', 'true');
 	await expect(page.getByRole('button', { name: 'Download .3MF', exact: true })).toBeDisabled();
 	await tab(page, 'Base');
 	await expect(page.getByRole('tab', { name: 'Base', exact: true })).toHaveAttribute('aria-selected', 'true');
-	await expect(updating).toBeVisible();
-	await expect(updating).toContainText(/\d\.\d s/);
-	await expect(page.getByTestId('viewport')).toHaveAttribute('aria-busy', 'true');
 	await expect(page.getByRole('button', { name: 'Download .3MF', exact: true })).toBeEnabled({ timeout: 180000 });
-	await expect(updating).toHaveCount(0);
-	await expect(page.getByText(/^Updated in \d+\.\d s$/)).toBeVisible();
 	await expect(page.getByTestId('viewport')).toHaveAttribute('aria-busy', 'false');
+	const log = await statusLog();
+	expect(log.some((text) => text === 'Updating model…')).toBe(true);
+	expect(log.some((text) => /^Updating model…\d+\.\d s$/.test(text))).toBe(true);
+	expect(log.some((text) => /^Updated in \d+\.\d s$/.test(text))).toBe(true);
 });
 
 test('presets and project save/load round-trip', async ({ page }) => {

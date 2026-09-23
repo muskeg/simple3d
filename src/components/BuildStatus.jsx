@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check } from 'lucide-react';
+import { describeStatus, ELAPSED_AFTER_MS } from '../lib/status.js';
 
-const SHOW_AFTER_MS = 250;
-const ELAPSED_AFTER_MS = 1000;
 const DONE_VISIBLE_MS = 2000;
 
 /**
@@ -40,23 +39,24 @@ export default function BuildStatus({ building, activity, initializing }) {
 		return () => clearInterval(interval);
 	}, [since]);
 
-	const elapsed = since === null ? 0 : Math.max(0, now - since);
-	const label = initializing ? 'Loading geometry engine…' : activity || 'Updating model…';
-	const visible = since !== null && (initializing || activity || elapsed >= SHOW_AFTER_MS);
+	// Read the clock at render so a late interval tick on a busy page never shows a stale time.
+	const elapsed = since === null ? 0 : Math.max(0, Math.max(now, performance.now()) - since);
+	const status = describeStatus({ initializing, activity, building, elapsed, done });
 	const pill = 'pointer-events-none flex items-center gap-2 rounded-full border border-white/10 bg-neutral-900/90 px-3 py-1.5 text-xs text-neutral-200 shadow-lg';
 
 	return (
-		<div aria-live="polite" className="absolute right-3 top-3 z-10">
-			{visible ? (
-				<div role="progressbar" aria-label={label} aria-busy="true" className={pill}>
+		<div aria-live="polite" data-testid="build-status" className="absolute right-3 top-3 z-10">
+			{status.kind === 'progress' && (
+				<div role="progressbar" aria-label={status.label} aria-busy="true" className={pill}>
 					<span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-neutral-600 border-t-indigo-400" />
-					<span>{label}</span>
-					{elapsed >= ELAPSED_AFTER_MS && <span className="tabular-nums text-neutral-400">{(elapsed / 1000).toFixed(1)} s</span>}
+					<span>{status.label}</span>
+					{status.time && <span className="tabular-nums text-neutral-400">{status.time}</span>}
 				</div>
-			) : done !== null && (
+			)}
+			{status.kind === 'done' && (
 				<div className={`${pill} text-emerald-300`}>
 					<Check size={13} />
-					<span>Updated in {(done / 1000).toFixed(1)} s</span>
+					<span>{status.label}</span>
 				</div>
 			)}
 		</div>

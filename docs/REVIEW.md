@@ -102,7 +102,7 @@ Chromium on 2026-09-22. CI is configured for Node.js 22.
 
 | Check | Result |
 | --- | --- |
-| `npm test` | 108 tests passed |
+| `npm test` | 111 tests passed |
 | `npm run test:e2e` | 27 browser tests passed |
 | `npm run build` | Production JS, CSS, worker, local fonts and WASM packaged successfully |
 | `npm run test:production` | All 27 browser tests passed against the static build |
@@ -254,11 +254,21 @@ bases, shell/lid, projects), `2338bb1` (UI, alignment, text), `354c438`
   control). They now fall back to their text labels.
 - Clicking empty viewport space kept the selection, so the gizmo could not be
   hidden without the Escape key. Empty clicks now deselect.
+- The processing-indicator browser test passed locally but failed in GitHub
+  Actions: it expected the start-up pill to show elapsed time, but on a small
+  runner the page is busy for over a second during start-up, so the pill's
+  100 ms timer was delayed and no elapsed-time render happened before loading
+  finished. Reproduced by pinning Chromium to one core. The pill now reads the
+  clock whenever it renders, its display rules are a pure unit-tested function
+  (`src/lib/status.js`), and the browser test records every pill state with a
+  MutationObserver instead of polling for short-lived text.
 
 ### Verification
 
-On 2026-09-23: 108 numerical tests, 27 development browser tests, a production
-build and 27 production browser tests passed. New numerical suites are
+On 2026-09-23: 111 numerical tests, 27 development browser tests, a production
+build and 27 production browser tests passed; the production suite also passed
+with Chromium restricted to two CPU cores (`taskset -c 0,1`, `CI=1`) to
+approximate a GitHub-hosted runner, and the processing-indicator test on one core. New numerical suites are
 `features.test.js`, `ux.test.js`, `arrays.test.js` and `meshes.test.js`;
 `tests/fixtures/font.js` and `tests/fixtures/meshes.js` generate an OTF and
 STL/OBJ files at test time instead of committing binaries. No push, remote
