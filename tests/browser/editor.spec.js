@@ -559,6 +559,91 @@ test('custom base meshes and mesh objects import, scale, rotate and export', asy
 	expect((await stl(page)).volume).toBeLessThan(before.volume - 60);
 });
 
+test('text base follows its text, scales uniformly, joins letters and uses uploaded fonts', async ({ page }) => {
+	await page.getByRole('button', { name: 'Delete ABC', exact: true }).click();
+	await tab(page, 'Base');
+	const dims = async () => Promise.all(['Width', 'Depth', 'Height'].map(async (name) => Number(await page.getByRole('textbox', { name, exact: true }).inputValue())));
+	await page.getByRole('button', { name: 'Text', exact: true }).click();
+	await expect(page.getByRole('textbox', { name: 'Base Text', exact: true })).toHaveValue('Hello');
+	await expect(page.getByRole('checkbox', { name: 'Hollow shell', exact: true })).toHaveCount(0);
+	await ready(page);
+	const [width, depth] = await dims();
+	let exported = await stl(page);
+	expect(exported.size[0]).toBeCloseTo(width, 2);
+	expect(exported.size[1]).toBeCloseTo(depth, 2);
+	expect(exported.size[2]).toBeCloseTo(8, 3);
+
+	// Longer text widens the base; the height (letter thickness) is untouched.
+	const text = page.getByRole('textbox', { name: 'Base Text', exact: true });
+	await text.fill('Hello there');
+	await ready(page);
+	const [longer, , height] = await dims();
+	expect(longer).toBeGreaterThan(width + 40);
+	expect(height).toBe(8);
+
+	// Editing the width scales the lettering instead of stretching it.
+	const [, longerDepth] = await dims();
+	await number(page, 'Width', Number((longer * 2).toFixed(3)));
+	const [doubled, doubledDepth] = await dims();
+	expect(doubled).toBeCloseTo(longer * 2, 1);
+	expect(doubledDepth).toBeCloseTo(longerDepth * 2, 1);
+	await expect(page.getByRole('textbox', { name: 'Text Size', exact: true })).toHaveValue('60');
+	await number(page, 'Text Size', 30);
+
+	// Without a backing, the letters are separate pieces and the base gets lighter.
+	const outlined = await stl(page);
+	await page.getByRole('button', { name: 'None', exact: true }).click();
+	await expect(page.getByRole('textbox', { name: 'Backing Margin', exact: true })).toHaveCount(0);
+	await ready(page);
+	expect((await stl(page)).volume).toBeLessThan(outlined.volume);
+	await number(page, 'Base Letter Spacing', 2);
+	expect((await dims())[0]).toBeCloseTo(longer - 6 + 20, 0);
+
+	await page.locator('#base-font-input').setInputFiles({ name: 'Blocks.otf', mimeType: 'font/otf', buffer: Buffer.from(makeTestFont()) });
+	const font = page.getByRole('combobox', { name: 'Base Font', exact: true });
+	await expect(font).toHaveValue('custom-1');
+	// The generated font only has A, B and space.
+	await text.fill('AB BA');
+	await ready(page);
+	exported = await stl(page);
+	expect(exported.size[0]).toBeCloseTo((await dims())[0], 2);
+	expect((await dims())[0]).toBeLessThan(longer);
+
+	// Standing: upright letters on a 20 mm deep stand, or on their own. Stand height and overhang doubled with the earlier width edit.
+	const [flatWidth] = await dims();
+	await page.getByRole('button', { name: 'Standing', exact: true }).click();
+	await ready(page);
+	await expect(page.getByRole('textbox', { name: 'Stand Overhang', exact: true })).toHaveValue('8');
+	const [standingWidth, standDepth, standingHeight] = await dims();
+	expect(standDepth).toBe(20);
+	expect(standingWidth).toBeCloseTo(flatWidth + 16, 1);
+	exported = await stl(page);
+	expect(exported.size[1]).toBeCloseTo(20, 3);
+	expect(exported.size[2]).toBeCloseTo(standingHeight, 2);
+	await page.getByRole('checkbox', { name: 'Stand on a base', exact: true }).uncheck();
+	await expect(page.getByRole('textbox', { name: 'Stand Height', exact: true })).toHaveCount(0);
+	await ready(page);
+	const [, freeDepth, freeHeight] = await dims();
+	expect(freeDepth).toBe(8);
+	expect(freeHeight).toBeCloseTo(standingHeight - 8, 2);
+
+	const pending = page.waitForEvent('download');
+	await fileMenu(page, 'Save project');
+	const project = JSON.parse((await readFile(await (await pending).path())).toString());
+	expect(project.settings).toMatchObject({ baseShape: 'text', baseText: 'AB BA', baseFont: 'custom-1', baseBacking: 'none', baseLetterSpacing: 2, baseTextOrientation: 'standing', baseStand: false });
+
+	// The dots of standing i and j are bridged down by default, or kept floating.
+	await page.getByRole('combobox', { name: 'Base Font', exact: true }).selectOption('helvetiker_bold');
+	await text.fill('ij');
+	await ready(page);
+	await expect(page.getByRole('button', { name: 'Connect', exact: true })).toHaveAttribute('aria-pressed', 'true');
+	const bridged = await stl(page);
+	await page.getByRole('button', { name: 'Keep', exact: true }).click();
+	await expect(page.getByRole('textbox', { name: 'Bridge Width', exact: true })).toHaveCount(0);
+	await ready(page);
+	expect((await stl(page)).volume).toBeLessThan(bridged.volume);
+});
+
 test('processing indicator covers start-up and slow builds without blocking the UI', async ({ page }) => {
 	test.setTimeout(240000);
 	// Record every state the pill shows, so assertions don't depend on polling at the right moment on a slow runner.

@@ -262,6 +262,27 @@ bases, shell/lid, projects), `2338bb1` (UI, alignment, text), `354c438`
   clock whenever it renders, its display rules are a pure unit-tested function
   (`src/lib/status.js`), and the browser test records every pill state with a
   MutationObserver instead of polling for short-lived text.
+### Text Base (2026-10-09)
+
+Base shape **Text** (`src/lib/textBase.js`): the glyph union shared with text
+objects (`textSection` in `geometry.js`), optional stroke weight (round offset)
+and an Outline or Plate backing, extruded by the letter thickness, either flat
+or standing (upright, cut flat at the last baseline, optional stand slab;
+without a backing, floating pieces are bridged lowest-first to the first solid
+below, removed or kept). The stand rises 0.05 mm into the letters because
+Manifold does not fuse solids whose faces only touch (found by a two-line test).
+All three dimensions are measured from the text in `applyBaseChange`; in-plane
+edits scale size, spacing, weight, margin and stand together, thickness-axis
+edits scale the thicknesses. Bundled fonts are registered once on the page and
+in the worker (`registerFonts`), so base geometry needs no font argument.
+Verified by `tests/textBase.test.js` (measured size, uniform scaling,
+one piece with a backing or stand, exact weight/spacing/margin growth, objects
+on the base, empty-text fallback, standing orientation read from the front
+with the panel behind, descender trimming, project round trip and hostile
+values) and a browser test (text, width scaling, backing, spacing, uploaded
+font, standing with and without stand, save).
+On 2026-10-09: 125 numerical tests, a production build and 28 production
+browser tests passed with Chromium pinned to two cores (`CI=1`).
 
 ### Verification
 

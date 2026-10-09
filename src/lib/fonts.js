@@ -39,6 +39,17 @@ export function fontOptions(settings) {
 	return [...FONTS, ...(settings.customFonts || []).map(({ id, label }) => ({ id, label }))];
 }
 
+let registered = {};
+
+/** Bundled fonts loaded by the page or worker; the text base resolves its font from these. */
+export function registerFonts(fonts) {
+	registered = fonts || {};
+}
+
+export function baseFont(settings) {
+	return objectFont(registered, { font: settings.baseFont }, settings);
+}
+
 export function objectFont(fonts, object, settings) {
 	if (fonts?.isFont) return fonts;
 	const id = object.font || settings.font || 'helvetiker';

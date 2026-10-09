@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { createBaseGeometry as createBoxGeometry, roundedRectShape } from './geometry.js';
 import { decodeMesh } from './meshData.js';
+import { createTextBaseGeometry } from './textBase.js';
 
 /**
  * Base shape library.
@@ -15,6 +16,7 @@ import { decodeMesh } from './meshData.js';
  *   ngon     : regular polygon prism (flat front edge) scaled to W x D
  *   tube     : elliptical ring W x D with a wall thickness, H tall
  *   torus    : ring lying flat, W x D footprint, H thick
+ *   text     : typed text extruded H tall; W x D are measured from the text
  */
 export const BASE_SHAPES = [
 	{ id: 'box', label: 'Box' },
@@ -25,6 +27,7 @@ export const BASE_SHAPES = [
 	{ id: 'ngon', label: 'N-gon' },
 	{ id: 'tube', label: 'Tube' },
 	{ id: 'torus', label: 'Torus' },
+	{ id: 'text', label: 'Text' },
 ];
 
 // Prism shapes whose footprint can be offset for hollow shells and lids.
@@ -171,6 +174,9 @@ function createRawGeometry(settings) {
 		case 'custom':
 			if (settings.customMesh) return decodeMesh(settings.customMesh).clone();
 			return createBoxGeometry(settings);
+
+		case 'text':
+			return createTextBaseGeometry(settings) ?? createBoxGeometry(settings);
 
 		case 'box':
 		default:

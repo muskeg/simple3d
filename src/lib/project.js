@@ -6,6 +6,7 @@ import { OBJECT_MODES, HOLE_HEADS, HOLE_DEPTHS } from './objects.js';
 import { MAX_SVG_BYTES } from './svg.js';
 import { ARRAY_KINDS } from './arrays.js';
 import { MAX_MESH_TRIANGLES } from './meshImport.js';
+import { BACKINGS, FLOATING_MODES, TEXT_ORIENTATIONS } from './textBase.js';
 
 export const PROJECT_APP = 'simple3d';
 export const PROJECT_VERSION = 1;
@@ -16,8 +17,11 @@ const SETTINGS_NUMBERS = {
 	width: [0.1, 800], depth: [0.1, 800], height: [0.1, 400], cornerRadius: [0, 400], chamfer: [0, 100],
 	chamferSegments: [1, 16], radialSegments: [8, 128], sides: [3, 12], tubeWall: [0.2, 100], wall: [0.4, 50],
 	lidThickness: [0.4, 50], lipDepth: [0, 100], lidClearance: [0, 2], insetDepth: [0.1, 100],
+	baseFontSize: [1, 500], baseLetterSpacing: [-50, 100], baseLineHeight: [0.5, 3], baseTextWeight: [-5, 50],
+	baseBackingMargin: [0, 100], baseBackingHeight: [0.1, 400], baseTextDepth: [0.2, 400],
+	baseStandHeight: [0.2, 400], baseStandDepth: [0.2, 800], baseStandMargin: [0, 400], baseBridgeWidth: [0.2, 50],
 };
-const SETTINGS_BOOLEANS = ['shell', 'openTop', 'lid', 'meshLock'];
+const SETTINGS_BOOLEANS = ['shell', 'openTop', 'lid', 'meshLock', 'baseStand'];
 const OBJECT_NUMBERS = {
 	fontSize: [0.5, 300], curveSegments: [2, 32], extrudeHeight: [0.05, 200], inlayDepth: [0.1, 100], insetDepth: [0.1, 100],
 	threshold: [1, 255], maskResolution: [32, 1024], shapeHeight: [0.5, 300], sides: [3, 24], innerRatio: [0.1, 0.95],
@@ -145,6 +149,12 @@ export function parseProject(text, defaults) {
 	if (ids(FONTS).includes(raw.font)) settings.font = raw.font;
 	if (raw.customFonts !== undefined) settings.customFonts = sanitizeFonts(raw.customFonts);
 	const fontIds = [...ids(FONTS), ...ids(settings.customFonts || [])];
+	if (typeof raw.baseText === 'string') settings.baseText = raw.baseText.slice(0, MAX_TEXT_LENGTH);
+	if (fontIds.includes(raw.baseFont)) settings.baseFont = raw.baseFont;
+	if (OBJECT_ENUMS.align.includes(raw.baseTextAlign)) settings.baseTextAlign = raw.baseTextAlign;
+	if (ids(BACKINGS).includes(raw.baseBacking)) settings.baseBacking = raw.baseBacking;
+	if (ids(TEXT_ORIENTATIONS).includes(raw.baseTextOrientation)) settings.baseTextOrientation = raw.baseTextOrientation;
+	if (ids(FLOATING_MODES).includes(raw.baseFloating)) settings.baseFloating = raw.baseFloating;
 	if (!Array.isArray(raw.objects)) throw new Error('Project has no object list.');
 	if (raw.objects.length > MAX_OBJECTS) throw new Error(`Projects are limited to ${MAX_OBJECTS} objects.`);
 	const used = new Set();

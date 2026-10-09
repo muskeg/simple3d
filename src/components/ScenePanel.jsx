@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import NumberField from './NumberField.jsx';
-import { Section, Group, Checkbox, Segmented, IconButton, Menu, MenuItem, MenuLabel } from './ui.jsx';
+import { Section, Group, Checkbox, Segmented, IconButton, Menu, MenuItem, MenuLabel, Select } from './ui.jsx';
 import { BASE_SHAPES, SHELL_SHAPES } from '../lib/baseShapes.js';
 import { MAX_SVG_BYTES } from '../lib/svg.js';
 import { objectLabel } from '../lib/objects.js';
 import { lidEnabled, shellEnabled } from '../lib/bodies.js';
 import { PRESETS } from '../lib/presets.js';
 import { MESH_ACCEPT } from '../lib/meshImport.js';
-import { Copy, Trash2, Image, Type, Download, Shapes, CircleDot, FileCode, Save, FolderOpen, ChevronDown, FilePlus, Box, Cylinder, Circle, Cone, Pyramid, Hexagon, Disc, Donut, Menu as MenuIcon, Sparkles, Undo2, Redo2, X, Package } from 'lucide-react';
+import { fontOptions } from '../lib/fonts.js';
+import { BACKINGS, FLOATING_MODES, TEXT_ORIENTATIONS } from '../lib/textBase.js';
+import { MAX_TEXT_LENGTH } from '../lib/project.js';
+import { Copy, Trash2, Image, Type, Download, Shapes, CircleDot, FileCode, Save, FolderOpen, ChevronDown, FilePlus, Box, Cylinder, Circle, Cone, Pyramid, Hexagon, Disc, Donut, Menu as MenuIcon, Sparkles, Undo2, Redo2, X, Package, Upload, AlignStartVertical, AlignCenterVertical, AlignEndVertical } from 'lucide-react';
 
 export const MODES = [
 	{ id: 'raised', label: 'Raised' },
@@ -15,7 +18,13 @@ export const MODES = [
 	{ id: 'flush_inlay', label: 'Flush Inlay' },
 ];
 
-const SHAPE_ICONS = { box: Box, cylinder: Cylinder, sphere: Circle, cone: Cone, pyramid: Pyramid, ngon: Hexagon, tube: Disc, torus: Donut, custom: Package };
+export const TEXT_ALIGN = [
+	{ id: 'left', label: 'Align left', Icon: AlignStartVertical },
+	{ id: 'center', label: 'Align center', Icon: AlignCenterVertical },
+	{ id: 'right', label: 'Align right', Icon: AlignEndVertical },
+];
+
+const SHAPE_ICONS = { box: Box, cylinder: Cylinder, sphere: Circle, cone: Cone, pyramid: Pyramid, ngon: Hexagon, tube: Disc, torus: Donut, text: Type, custom: Package };
 
 const ADD_BUTTONS = [
 	{ type: 'text', label: 'Text', aria: 'Add Text Object', Icon: Type },
@@ -55,7 +64,7 @@ function BaseTab({ settings: s, setNumber, rotateBaseMesh, resetBaseMeshSize }) 
 	const isFilleted = s.chamfer > 0 && s.chamferSegments > 1;
 	const hasLid = lidEnabled(s);
 	const pickBaseMesh = () => document.getElementById('base-mesh-input')?.click();
-	const segmented = !['box', 'ngon', 'custom'].includes(s.baseShape);
+	const segmented = !['box', 'ngon', 'custom', 'text'].includes(s.baseShape);
 	return (
 		<>
 			<Section id="base-shape" title="Base">
@@ -82,6 +91,58 @@ function BaseTab({ settings: s, setNumber, rotateBaseMesh, resetBaseMeshSize }) 
 							<Checkbox label="Keep proportions" checked={s.meshLock !== false} onChange={(v) => setNumber('meshLock')(v)} />
 							<button onClick={resetBaseMeshSize} className="text-[11px] text-indigo-300 hover:text-indigo-100">Original size</button>
 						</div>
+					</div>
+				)}
+				{s.baseShape === 'text' && (
+					<div className="space-y-2 rounded-md border border-white/5 bg-neutral-950/30 p-2">
+						<label className="block text-xs text-neutral-300">
+							<span className="mb-1 block text-neutral-400">Base Text</span>
+							<textarea value={s.baseText} rows={Math.min(4, Math.max(1, s.baseText.split('\n').length))} onChange={(e) => setNumber('baseText')(e.target.value)} maxLength={MAX_TEXT_LENGTH} placeholder="Type something" className="w-full resize-y rounded-md border border-neutral-700 bg-neutral-800 px-2 py-1 text-sm outline-none focus:border-indigo-500" />
+						</label>
+						<div className="flex items-end gap-1.5">
+							<div className="min-w-0 flex-1"><Select label="Base Font" value={s.baseFont} onChange={(id) => setNumber('baseFont')(id)} options={fontOptions(s)} /></div>
+							<IconButton label="Upload base font" Icon={Upload} onClick={() => document.getElementById('base-font-input')?.click()} />
+						</div>
+						<Segmented label="Text orientation" value={s.baseTextOrientation} options={TEXT_ORIENTATIONS} onChange={(id) => setNumber('baseTextOrientation')(id)} />
+						{s.baseText.includes('\n') && <Segmented label="Base text alignment" value={s.baseTextAlign} options={TEXT_ALIGN} iconOnly onChange={(id) => setNumber('baseTextAlign')(id)} />}
+						<NumberField label="Text Size" value={s.baseFontSize} min={1} max={500} step={0.5} suffix=" mm" onChange={(v) => setNumber('baseFontSize')(Math.max(1, v))} />
+						<NumberField label="Letter Thickness" value={s.baseTextDepth} min={0.2} max={400} step={0.5} suffix=" mm" onChange={(v) => setNumber('baseTextDepth')(Math.max(0.2, v))} />
+						<NumberField label="Base Letter Spacing" value={s.baseLetterSpacing} min={-50} max={100} step={0.1} suffix=" mm" onChange={(v) => setNumber('baseLetterSpacing')(v)} />
+						{s.baseText.includes('\n') && <NumberField label="Base Line Spacing" value={s.baseLineHeight} min={0.5} max={3} hardMax={3} step={0.05} onChange={(v) => setNumber('baseLineHeight')(Math.max(0.5, v))} />}
+						<NumberField label="Letter Weight" value={s.baseTextWeight} min={-5} max={50} step={0.1} suffix=" mm" onChange={(v) => setNumber('baseTextWeight')(v)} />
+						<Segmented label="Backing" value={s.baseBacking} options={BACKINGS} onChange={(id) => setNumber('baseBacking')(id)} />
+						{s.baseBacking !== 'none' && (
+							<>
+								<NumberField label="Backing Margin" value={s.baseBackingMargin} min={0} max={100} step={0.5} suffix=" mm" onChange={(v) => setNumber('baseBackingMargin')(Math.max(0, v))} />
+								<NumberField label="Backing Thickness" value={s.baseBackingHeight} min={0.1} max={400} step={0.2} suffix=" mm" onChange={(v) => setNumber('baseBackingHeight')(Math.max(0.1, v))} />
+							</>
+						)}
+						{s.baseTextOrientation === 'standing' && (
+							<>
+								{s.baseBacking === 'none' && (
+									<>
+										<div className="flex items-center gap-2">
+											<span className="shrink-0 text-xs text-neutral-300">Floating parts</span>
+											<div className="flex-1"><Segmented label="Floating parts" value={s.baseFloating} options={FLOATING_MODES} onChange={(id) => setNumber('baseFloating')(id)} /></div>
+										</div>
+										{s.baseFloating === 'connect' && <NumberField label="Bridge Width" value={s.baseBridgeWidth} min={0.2} max={50} step={0.1} suffix=" mm" onChange={(v) => setNumber('baseBridgeWidth')(Math.max(0.2, v))} />}
+									</>
+								)}
+								<Checkbox label="Stand on a base" checked={s.baseStand} onChange={(v) => setNumber('baseStand')(v)} />
+								{s.baseStand && (
+									<>
+										<NumberField label="Stand Height" value={s.baseStandHeight} min={0.2} max={400} step={0.5} suffix=" mm" onChange={(v) => setNumber('baseStandHeight')(Math.max(0.2, v))} />
+										<NumberField label="Stand Depth" value={s.baseStandDepth} min={0.2} max={800} step={0.5} suffix=" mm" onChange={(v) => setNumber('baseStandDepth')(Math.max(0.2, v))} />
+										<NumberField label="Stand Overhang" value={s.baseStandMargin} min={0} max={400} step={0.5} suffix=" mm" onChange={(v) => setNumber('baseStandMargin')(Math.max(0, v))} />
+									</>
+								)}
+							</>
+						)}
+						<p className="text-[11px] leading-relaxed text-neutral-500">
+							{s.baseTextOrientation === 'standing'
+								? 'Width and height follow the text and scale it; depth scales the thicknesses. Letters are cut flat at the baseline so they stand. The backing becomes a back panel; without one, floating parts (dots on i and j, upper lines) are bridged to the part below, removed or kept.'
+								: 'Width and depth follow the text and scale it; height scales the thicknesses. Weight thickens letters, and a backing joins them into one piece.'}
+						</p>
 					</div>
 				)}
 				<div className="grid grid-cols-3 gap-1.5">
@@ -185,7 +246,7 @@ function ObjectsTab({ settings: s, setNumber, setMode, selection, onSelect, addO
 }
 
 export default function ScenePanel({
-	settings, setNumber, setMode, selection, onSelect, addObject, addImageObject, addSvgObject, addMeshObject, importBaseMesh, rotateBaseMesh, resetBaseMeshSize, duplicateObjects, removeObjects,
+	settings, setNumber, setMode, selection, onSelect, addObject, addImageObject, addSvgObject, addMeshObject, importBaseMesh, rotateBaseMesh, resetBaseMeshSize, addCustomFont, duplicateObjects, removeObjects,
 	onNewProject, onSaveProject, onLoadProject, onApplyPreset, onExport3MF, onExportSTL,
 	exporting, error, warning, fontError, ready, inspector, undo, redo, canUndo, canRedo, notice, onDismissNotice,
 }) {
@@ -246,6 +307,7 @@ export default function ScenePanel({
 			<input id="project-file-input" type="file" accept=".json,application/json" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ''; if (file) guard(() => onLoadProject(file)); }} />
 			<input id="base-mesh-input" type="file" accept={MESH_ACCEPT} className="hidden" onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ''; if (file) guard(() => importBaseMesh(file)); }} />
 			<input id="mesh-object-input" type="file" accept={MESH_ACCEPT} className="hidden" onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ''; if (file) guard(() => addMeshObject(file)); }} />
+			<input id="base-font-input" type="file" accept=".ttf,.otf,font/ttf,font/otf" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ''; if (file) guard(() => addCustomFont(file, 'base')); }} />
 
 			<footer className="space-y-2 border-t border-white/10 px-3 py-2.5">
 				{(error || fileError) && <p role="alert" className="rounded bg-red-500/15 px-2 py-1 text-[11px] text-red-300">{error || fileError}</p>}

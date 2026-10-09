@@ -1,7 +1,7 @@
 import { FontLoader } from 'three/addons/loaders/FontLoader.js';
 import { buildModel, disposeGroup, initGeometryEngine, partsFromGroup } from './csg.js';
 import { preloadMaskImage } from './mask.js';
-import { FONTS } from './fonts.js';
+import { FONTS, registerFonts } from './fonts.js';
 
 // Geometry builds run here so booleans never block pointer or typing on the page.
 let ready;
@@ -13,7 +13,9 @@ async function loadFonts(base) {
 		if (!response.ok) throw new Error(`Unable to load ${entry.label}.`);
 		return [entry.id, loader.parse(await response.json())];
 	}));
-	return Object.fromEntries(entries);
+	const fonts = Object.fromEntries(entries);
+	registerFonts(fonts);
+	return fonts;
 }
 
 self.onmessage = async ({ data }) => {

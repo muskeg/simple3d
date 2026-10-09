@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import NumberField, { VectorField } from './NumberField.jsx';
 import { Section, Group, Checkbox, Select, Segmented, IconButton } from './ui.jsx';
-import { TYPE_ICONS, MODES, readImageFile, readSvgFile } from './ScenePanel.jsx';
+import { TYPE_ICONS, MODES, TEXT_ALIGN, readImageFile, readSvgFile } from './ScenePanel.jsx';
 import { rotateAboutWorldAxis } from '../lib/placement.js';
 import { fontOptions } from '../lib/fonts.js';
 import { SHAPE_KINDS } from '../lib/shapes2d.js';
@@ -16,11 +16,6 @@ const ARRAY_ICONS = { none: Minus, linear: Columns3, grid: LayoutGrid, circular:
 
 const FACE_BUTTONS = ['top', 'bottom', 'front', 'back', 'left', 'right'];
 const SHAPE_ICONS = { circle: Circle, rect: RectangleHorizontal, star: Star, heart: Heart, polygon: Hexagon, arrow: ArrowRight };
-const TEXT_ALIGN = [
-	{ id: 'left', label: 'Align left', Icon: AlignStartVertical },
-	{ id: 'center', label: 'Align center', Icon: AlignCenterVertical },
-	{ id: 'right', label: 'Align right', Icon: AlignEndVertical },
-];
 const AXES = [{ id: 'x', label: 'X' }, { id: 'y', label: 'Y' }, { id: 'z', label: 'Z' }];
 
 function FileButton({ id, label, accept, onFile }) {

@@ -52,7 +52,7 @@ notice, and File > Save project still works.
 ### Base Dimensions
 
 - Box, cylinder, sphere, cone, pyramid, N-gon prism (3-12 sides, flat front
-	edge), tube (with wall thickness) and torus are supported.
+	edge), tube (with wall thickness), torus and text are supported.
 - Width, Depth and Height are the **complete base bounding box in millimeters**,
 	including chamfers/fillets. A non-square cylinder or cone has an elliptical
 	footprint; a non-square pyramid has a rectangular footprint. A sphere can be
@@ -69,6 +69,32 @@ notice, and File > Save project still works.
 	places and reject malformed or non-finite values. Geometry uses floating-point
 	arithmetic, not exact rational arithmetic.
 - Surface/curve segment counts and mask resolution have hard complexity limits.
+
+### Text Base
+
+Choose **Text** in the base shapes to make the typed text itself the base.
+Pick a bundled font or upload a TTF/OTF, and set Text Size, Letter Thickness,
+letter spacing (negative values overlap letters), line spacing and alignment
+for multi-line text. **Letter Weight** thickens (or thins) every stroke. Loose
+letters (and dots) print as separate pieces, so a **Backing** joins them:
+**Outline** follows the letter shapes at the given margin, **Plate** is a
+rounded rectangle around the text; Backing Thickness is measured from the back.
+
+**Flat** text lies on the bed, Letter Thickness tall. **Standing** text stands
+upright facing the front: letters are cut flat at the baseline (descenders
+are trimmed) so round letters stand, the backing becomes a back panel, and
+**Stand on a base** adds a slab under the text (height, front-to-back depth
+and side overhang). Without a backing, **Floating parts** that would hang in
+the air (dots on i and j, the upper dot of a colon, whole upper lines) are
+**Connected** by a vertical bridge (Bridge Width) to the first solid part
+below them, or to the ground; **Remove** drops them and **Keep** leaves them.
+
+Width, Depth and Height are measured from the text. Editing one of the two
+dimensions in the text's plane scales the lettering (and backing margin and
+stand) uniformly; editing the thickness axis (Height when flat, Depth when
+standing) scales the thicknesses. Objects, holes and inlays work on a text
+base; shells, lids and chamfers do not. Font kerning tables are not used, so
+spacing is uniform.
 
 ### Custom Base Meshes
 

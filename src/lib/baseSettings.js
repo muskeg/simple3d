@@ -1,14 +1,17 @@
 import { facePlacementPreset } from './placement.js';
 import { lidOrigin, shellEnabled, shellWall } from './bodies.js';
 import { objectBody } from './objects.js';
+import { TEXT_BASE_KEYS, measureTextBase, scaleTextBase } from './textBase.js';
 
 // Base keys that move faces, so face-snapped objects are re-snapped.
-export const RESNAP_KEYS = ['baseShape', 'sides', 'tubeWall', 'shell', 'wall', 'openTop', 'lid', 'lidThickness', 'lipDepth', 'customMesh'];
+export const RESNAP_KEYS = ['baseShape', 'sides', 'tubeWall', 'shell', 'wall', 'openTop', 'lid', 'lidThickness', 'lipDepth', 'customMesh', ...TEXT_BASE_KEYS];
 const DIMENSIONS = ['width', 'height', 'depth'];
+const TEXT_SIZE_KEYS = ['baseShape', ...DIMENSIONS, ...TEXT_BASE_KEYS];
 
 /**
  * Applies a base-settings patch: clamps dependent values, keeps custom-mesh
- * proportions when one dimension changes (unless meshLock is false), then
+ * proportions when one dimension changes (unless meshLock is false), sizes a
+ * text base from its text (dimension edits scale the text), then
  * re-snaps face-attached objects or scales positions with the new size.
  */
 export function applyBaseChange(s, patch) {
@@ -17,6 +20,11 @@ export function applyBaseChange(s, patch) {
 	if (next.baseShape === 'custom' && next.meshLock !== false && keys.length === 1 && DIMENSIONS.includes(keys[0]) && s[keys[0]] > 0) {
 		const factor = patch[keys[0]] / s[keys[0]];
 		for (const key of DIMENSIONS) if (key !== keys[0]) next[key] = s[key] * factor;
+	}
+	if (next.baseShape === 'text' && keys.some((key) => TEXT_SIZE_KEYS.includes(key))) {
+		if (s.baseShape === 'text' && keys.length === 1 && DIMENSIONS.includes(keys[0]) && s[keys[0]] > 0) Object.assign(next, scaleTextBase(s, keys[0], patch[keys[0]] / s[keys[0]]));
+		const size = measureTextBase(next);
+		if (size) Object.assign(next, size);
 	}
 	next.cornerRadius = Math.min(next.cornerRadius, Math.min(next.width, next.depth) / 2);
 	next.chamfer = Math.min(next.chamfer, Math.min(next.width, next.depth, next.height) * 0.45);

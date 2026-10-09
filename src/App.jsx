@@ -16,7 +16,7 @@ import { shellEnabled, shellWall } from './lib/bodies.js';
 import { applyBaseChange } from './lib/baseSettings.js';
 import { loadMeshFile, MAX_MESH_BYTES, DENSE_MESH_TRIANGLES } from './lib/meshImport.js';
 import { decodeMesh, rotateMesh } from './lib/meshData.js';
-import { FONTS, MAX_FONT_BYTES, bufferToBase64, parseFontData } from './lib/fonts.js';
+import { FONTS, MAX_FONT_BYTES, bufferToBase64, parseFontData, registerFonts } from './lib/fonts.js';
 import { parseProject, serializeProject, MAX_PROJECT_BYTES } from './lib/project.js';
 import { PRESETS, presetSettings } from './lib/presets.js';
 import { alignObjects, bodyCenter, centerOnFace, distributeObjects, nudgeObjects } from './lib/align.js';
@@ -72,6 +72,25 @@ const DEFAULT_SETTINGS = {
 	tubeWall: 3,
 	customMesh: null, // imported base mesh record (see lib/meshData.js)
 	meshLock: true, // custom mesh keeps proportions when one dimension changes
+	// Text base: width/depth are measured from the text (see lib/textBase.js)
+	baseText: 'Hello',
+	baseFont: 'helvetiker_bold',
+	baseFontSize: 30,
+	baseLetterSpacing: 0,
+	baseLineHeight: 1,
+	baseTextAlign: 'center',
+	baseTextWeight: 0,
+	baseTextOrientation: 'flat', // 'flat' | 'standing'
+	baseTextDepth: 8, // letter thickness: up when flat, front-to-back when standing
+	baseBacking: 'outline', // 'none' | 'outline' | 'plate'
+	baseBackingMargin: 3,
+	baseBackingHeight: 2,
+	baseStand: true, // standing text sits on a slab
+	baseStandHeight: 4,
+	baseStandDepth: 20,
+	baseStandMargin: 4,
+	baseFloating: 'connect', // standing text without backing: 'connect' | 'remove' | 'keep'
+	baseBridgeWidth: 1.5,
 	// Hollow shell + lid (box, cylinder, n-gon)
 	shell: false,
 	wall: 2,
@@ -248,6 +267,8 @@ export default function App() {
 		const loader = new FontLoader();
 		Promise.all([initGeometryEngine(manifoldWasmURL), Promise.all(FONTS.map(async (entry) => [entry.id, await loader.loadAsync(`${import.meta.env.BASE_URL}fonts/${entry.file}`)]))])
 			.then(async ([, entries]) => {
+				const fonts = Object.fromEntries(entries);
+				registerFonts(fonts);
 				const restored = await restoreAutosave();
 				if (cancelled) return;
 				if (restored) {
@@ -257,7 +278,7 @@ export default function App() {
 					setNotice('Restored your previous session.');
 				}
 				autosaveReady.current = true;
-				setFont(Object.fromEntries(entries));
+				setFont(fonts);
 			})
 			.catch(() => { if (!cancelled) setFontError('Unable to load the geometry engine or fonts. Check your connection and reload.'); });
 		return () => {
@@ -446,7 +467,7 @@ export default function App() {
 		if (object) updateObject(id, { pos: { ...object.pos, [axis]: bodyCenter(settings, objectBody(object, settings) || 'base')[axis] }, face: 'auto' });
 	}, [settings, updateObject]);
 
-	const addCustomFont = useCallback(async (file, objectId) => {
+	const addCustomFont = useCallback(async (file, target) => {
 		if (file.size > MAX_FONT_BYTES) throw new Error('Font exceeds the 10 MB limit.');
 		const data = await runTask('Reading font…', async () => {
 			const encoded = bufferToBase64(await file.arrayBuffer());
@@ -458,11 +479,11 @@ export default function App() {
 		if (!existing && fonts.length >= 8) throw new Error('Projects are limited to 8 uploaded fonts.');
 		const id = existing?.id ?? `custom-${Math.max(0, ...fonts.map((entry) => Number(entry.id.slice(7)))) + 1}`;
 		const label = file.name.replace(/\.(ttf|otf)$/i, '').slice(0, 64) || 'Uploaded font';
-		setSettings((s) => ({
-			...s,
-			customFonts: existing ? s.customFonts : [...(s.customFonts || []), { id, label, data }],
-			objects: s.objects.map((o) => (o.id === objectId ? { ...o, font: id } : o)),
-		}));
+		setSettings((s) => {
+			const next = { ...s, customFonts: existing ? s.customFonts : [...(s.customFonts || []), { id, label, data }] };
+			if (target === 'base') return applyBaseChange(next, { baseFont: id });
+			return { ...next, objects: next.objects.map((o) => (o.id === target ? { ...o, font: id } : o)) };
+		});
 	}, [settings.customFonts]);
 
 	const explodeArray = useCallback((id) => {
@@ -621,6 +642,7 @@ export default function App() {
 				importBaseMesh={importBaseMesh}
 				rotateBaseMesh={rotateBaseMesh}
 				resetBaseMeshSize={resetBaseMeshSize}
+				addCustomFont={addCustomFont}
 				duplicateObjects={duplicateObjects}
 				removeObjects={removeObjects}
 				onNewProject={onNewProject}

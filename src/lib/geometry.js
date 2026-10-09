@@ -85,7 +85,26 @@ export function createBaseGeometry({ width, depth, height, cornerRadius, chamfer
  * inset/flush depth through the base) always follows the object's
  * orientation.
  */
-export function createTextGeometry(text, font, { fontSize, curveSegments, align = 'center', letterSpacing = 0, lineHeight = 1 }) {
+export function createTextGeometry(text, font, options) {
+	try {
+		return withTracking((track) => {
+			const laid = textSection(text, font, options, track);
+			if (!laid) return null;
+			const geometry = solidToGeometry(track(track(laid.section.extrude(1)).transform(Z_TO_Y_ARRAY)));
+			geometry.center();
+			return geometry;
+		});
+	} catch (err) {
+		throw new Error(`Unable to build text: ${err.message}`);
+	}
+}
+
+/**
+ * Lays out the glyph outlines and unions them into a tracked CrossSection
+ * (shape +y = up the page). Returns { section, baseline } with the last
+ * line's baseline y, or null when nothing renders.
+ */
+export function textSection(text, font, { fontSize, curveSegments, align = 'center', letterSpacing = 0, lineHeight = 1 }, track) {
 	const lines = String(text ?? '').replace(/\r/g, '').split('\n').map((line) => line.replace(/\s+$/, ''));
 	while (lines.length && !lines[0].trim()) lines.shift();
 	while (lines.length && !lines.at(-1).trim()) lines.pop();
@@ -110,27 +129,18 @@ export function createTextGeometry(text, font, { fontSize, curveSegments, align 
 	});
 	const widest = Math.max(...rows.map((row) => row.width));
 	const { CrossSection } = getEngine();
-	try {
-		return withTracking((track) => {
-			const sections = [];
-			for (const row of rows) {
-				const shift = align === 'left' ? 0 : align === 'right' ? widest - row.width : (widest - row.width) / 2;
-				for (const { key, x } of row.glyphs) {
-					for (const shape of font.generateShapes(key, size)) {
-						const { shape: outer, holes } = shape.extractPoints(segments);
-						const rings = [outer, ...holes].filter((ring) => ring.length >= 3).map((ring) => ring.map((point) => [point.x + x + shift, point.y + row.y]));
-						if (rings.length) sections.push(track(new CrossSection(rings, 'EvenOdd')));
-					}
-				}
+	const sections = [];
+	for (const row of rows) {
+		const shift = align === 'left' ? 0 : align === 'right' ? widest - row.width : (widest - row.width) / 2;
+		for (const { key, x } of row.glyphs) {
+			for (const shape of font.generateShapes(key, size)) {
+				const { shape: outer, holes } = shape.extractPoints(segments);
+				const rings = [outer, ...holes].filter((ring) => ring.length >= 3).map((ring) => ring.map((point) => [point.x + x + shift, point.y + row.y]));
+				if (rings.length) sections.push(track(new CrossSection(rings, 'EvenOdd')));
 			}
-			if (!sections.length) return null;
-			const merged = track(CrossSection.union(sections));
-			if (merged.isEmpty()) return null;
-			const geometry = solidToGeometry(track(track(merged.extrude(1)).transform(Z_TO_Y_ARRAY)));
-			geometry.center();
-			return geometry;
-		});
-	} catch (err) {
-		throw new Error(`Unable to build text: ${err.message}`);
+		}
 	}
+	if (!sections.length) return null;
+	const merged = track(CrossSection.union(sections));
+	return merged.isEmpty() ? null : { section: merged, baseline: rows.at(-1).y };
 }
